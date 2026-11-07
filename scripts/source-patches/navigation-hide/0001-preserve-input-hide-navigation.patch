@@ -1,0 +1,538 @@
+diff --git a/packages/SystemUI/src/com/android/systemui/navigationbar/GestureNavigationVisibilityController.java b/packages/SystemUI/src/com/android/systemui/navigationbar/GestureNavigationVisibilityController.java
+new file mode 100644
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/navigationbar/GestureNavigationVisibilityController.java
+@@ -0,0 +1,156 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.navigationbar;
++
++import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_GESTURAL;
++
++import android.content.Context;
++import android.content.om.IOverlayManager;
++import android.content.om.OverlayIdentifier;
++import android.content.om.OverlayInfo;
++import android.content.om.OverlayManagerTransaction;
++import android.database.ContentObserver;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.RemoteException;
++import android.os.UserHandle;
++import android.provider.Settings;
++import android.util.Log;
++
++import java.util.concurrent.Executor;
++import java.util.concurrent.atomic.AtomicInteger;
++import java.util.function.Supplier;
++
++/** Reconciles the per-user preference with the two preinstalled navigation overlays. */
++final class GestureNavigationVisibilityController {
++    private static final String TAG = "GestureNavVisibility";
++    private static final String REQUEST = "popsicle_hide_gesture_navigation";
++    private static final String APPLIED = "popsicle_hide_gesture_navigation_applied";
++    private static final String[] OVERLAYS = {
++            "org.pixelos.popsicle.navigation.framework",
++            "org.pixelos.popsicle.navigation.launcher"
++    };
++
++    private final IOverlayManager mOverlayManager;
++    private final Executor mExecutor;
++    private final Supplier<Context> mUserContext;
++    private final AtomicInteger mGeneration = new AtomicInteger();
++    private final Object mApplyLock = new Object();
++
++    GestureNavigationVisibilityController(Context context, IOverlayManager overlayManager,
++            Executor executor, Supplier<Context> userContext) {
++        mOverlayManager = overlayManager;
++        mExecutor = executor;
++        mUserContext = userContext;
++        context.getContentResolver().registerContentObserver(Settings.Secure.getUriFor(REQUEST),
++                false, new ContentObserver(new Handler(Looper.getMainLooper())) {
++                    @Override
++                    public void onChange(boolean selfChange) {
++                        onNavigationModeChanged(true);
++                    }
++                }, UserHandle.USER_ALL);
++    }
++
++    void onNavigationModeChanged() {
++        onNavigationModeChanged(false);
++    }
++
++    private void onNavigationModeChanged(boolean explicitRequest) {
++        final Context context = mUserContext.get();
++        final boolean hidden = context.getResources().getInteger(
++                com.android.internal.R.integer.config_navBarInteractionMode)
++                        == NAV_BAR_MODE_GESTURAL
++                && Settings.Secure.getInt(context.getContentResolver(), REQUEST, 0) == 1;
++        // Rollback broadcasts must not retry a failed request or cancel an explicit retry.
++        if (hidden && !explicitRequest
++                && Settings.Secure.getInt(context.getContentResolver(), APPLIED, 0) == -1) {
++            return;
++        }
++        final int generation = mGeneration.incrementAndGet();
++        mExecutor.execute(() -> {
++            synchronized (mApplyLock) {
++                if (generation != mGeneration.get()) {
++                    return;
++                }
++                if (hidden && !explicitRequest
++                        && Settings.Secure.getInt(context.getContentResolver(), APPLIED, 0) == -1) {
++                    return;
++                }
++                apply(context, hidden, generation);
++            }
++        });
++    }
++
++    private void apply(Context context, boolean hidden, int generation) {
++        final int userId = context.getUserId();
++        try {
++            // Restore application insets before restoring the visible handle.
++            if (!hidden && Settings.Secure.getInt(context.getContentResolver(), APPLIED, 0) == 1) {
++                Settings.Secure.putInt(context.getContentResolver(), APPLIED, 0);
++            }
++            final OverlayManagerTransaction.Builder transaction =
++                    new OverlayManagerTransaction.Builder();
++            boolean changed = false;
++            for (String name : OVERLAYS) {
++                final OverlayInfo info = mOverlayManager.getOverlayInfo(name, userId);
++                if (info == null || !info.isMutable) {
++                    throw new IllegalStateException("Missing mutable overlay " + name);
++                }
++                if (info.isEnabled() != hidden) {
++                    transaction.setEnabled(new OverlayIdentifier(name), hidden, userId);
++                    changed = true;
++                }
++            }
++            if (changed) {
++                mOverlayManager.commit(transaction.build());
++            }
++            for (String name : OVERLAYS) {
++                final OverlayInfo info = mOverlayManager.getOverlayInfo(name, userId);
++                if (info == null || info.isEnabled() != hidden) {
++                    throw new IllegalStateException("Overlay did not reach requested state " + name);
++                }
++            }
++            if (generation == mGeneration.get()) {
++                final int state = Settings.Secure.getInt(context.getContentResolver(), APPLIED, 0);
++                if (hidden || state != -1) {
++                    Settings.Secure.putInt(context.getContentResolver(), APPLIED, hidden ? 1 : 0);
++                }
++            }
++        } catch (RemoteException | RuntimeException e) {
++            if (generation != mGeneration.get()) {
++                return;
++            }
++            Log.e(TAG, "Unable to apply navigation visibility for user " + userId, e);
++            Settings.Secure.putInt(context.getContentResolver(), APPLIED, -1);
++            // Only Settings writes the request; a failed task must not cancel a newer retry.
++            // A partial external state must never be reported as hidden.
++            try {
++                final OverlayManagerTransaction.Builder rollback =
++                        new OverlayManagerTransaction.Builder();
++                for (String name : OVERLAYS) {
++                    if (mOverlayManager.getOverlayInfo(name, userId) != null) {
++                        rollback.setEnabled(new OverlayIdentifier(name), false, userId);
++                    }
++                }
++                mOverlayManager.commit(rollback.build());
++            } catch (RemoteException | RuntimeException rollbackError) {
++                Log.e(TAG, "Unable to restore navigation overlays for user " + userId,
++                        rollbackError);
++            }
++        }
++    }
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/navigationbar/NavigationModeController.java b/packages/SystemUI/src/com/android/systemui/navigationbar/NavigationModeController.java
+--- a/packages/SystemUI/src/com/android/systemui/navigationbar/NavigationModeController.java
++++ b/packages/SystemUI/src/com/android/systemui/navigationbar/NavigationModeController.java
+@@ -68,6 +68,7 @@
+     private final IOverlayManager mOverlayManager;
+     private final Executor mUiBgExecutor;
+     private final UserTracker mUserTracker;
++    private final GestureNavigationVisibilityController mGestureNavigationVisibilityController;
+ 
+     private ArrayList<ModeChangedListener> mListeners = new ArrayList<>();
+ 
+@@ -111,6 +112,8 @@
+         mOverlayManager = IOverlayManager.Stub.asInterface(
+                 ServiceManager.getService(Context.OVERLAY_SERVICE));
+         mUiBgExecutor = uiBgExecutor;
++        mGestureNavigationVisibilityController = new GestureNavigationVisibilityController(
++                context, mOverlayManager, uiBgExecutor, this::getCurrentUserContext);
+         dumpManager.registerDumpable(getClass().getSimpleName(), this);
+ 
+         IntentFilter overlayFilter = new IntentFilter(ACTION_OVERLAY_CHANGED);
+@@ -135,9 +138,11 @@
+         Trace.beginSection("NMC#updateCurrentInteractionMode");
+         mCurrentUserContext = getCurrentUserContext();
+         int mode = getCurrentInteractionMode(mCurrentUserContext);
++        final Context userContext = mCurrentUserContext;
+         mUiBgExecutor.execute(() ->
+-            Settings.Secure.putString(mCurrentUserContext.getContentResolver(),
++            Settings.Secure.putString(userContext.getContentResolver(),
+                     Secure.NAVIGATION_MODE, String.valueOf(mode)));
++        mGestureNavigationVisibilityController.onNavigationModeChanged();
+         if (DEBUG) {
+             Log.d(TAG, "updateCurrentInteractionMode: mode=" + mode);
+             dumpAssetPaths(mCurrentUserContext);
+diff --git a/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/NavigationHandle.java b/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/NavigationHandle.java
+--- a/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/NavigationHandle.java
++++ b/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/NavigationHandle.java
+@@ -20,17 +20,26 @@
+ import android.animation.ObjectAnimator;
+ import android.annotation.ColorInt;
+ import android.content.Context;
++import android.content.res.Configuration;
+ import android.content.res.Resources;
++import android.database.ContentObserver;
+ import android.graphics.Canvas;
+ import android.graphics.Paint;
+ import android.graphics.drawable.Drawable;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.UserHandle;
++import android.provider.Settings;
+ import android.util.AttributeSet;
+ import android.util.FloatProperty;
+ import android.view.ContextThemeWrapper;
++import android.view.Display;
+ import android.view.View;
+ import android.view.animation.Interpolator;
+ 
+ import com.android.app.animation.Interpolators;
++import com.android.systemui.Dependency;
++import com.android.systemui.navigationbar.NavigationModeController;
+ import com.android.settingslib.Utils;
+ import com.android.systemui.navigationbar.views.buttons.ButtonInterface;
+ import com.android.systemui.res.R;
+@@ -47,6 +56,20 @@
+     private final float mShrinkWidthForAnimation;
+     private boolean mRequiresInvalidate;
+     private boolean mShrink;
++    private boolean mHideGestureNavigation;
++    private int mNavigationMode;
++    private NavigationModeController mNavigationModeController;
++    private final NavigationModeController.ModeChangedListener mNavigationModeListener = mode -> {
++        mNavigationMode = mode;
++        updateNavigationVisibility();
++    };
++    private final ContentObserver mNavigationVisibilityObserver =
++            new ContentObserver(new Handler(Looper.getMainLooper())) {
++                @Override
++                public void onChange(boolean selfChange) {
++                    updateNavigationVisibility();
++                }
++            };
+ 
+     private ObjectAnimator mPulseAnimator = null;
+     private float mPulseAnimationProgress;
+@@ -91,6 +114,47 @@
+     }
+ 
+     @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        getContext().getContentResolver().registerContentObserver(Settings.Secure.getUriFor(
++                "popsicle_hide_gesture_navigation"), false, mNavigationVisibilityObserver,
++                UserHandle.USER_ALL);
++        getContext().getContentResolver().registerContentObserver(Settings.Secure.getUriFor(
++                "popsicle_hide_gesture_navigation_applied"), false, mNavigationVisibilityObserver,
++                UserHandle.USER_ALL);
++        mNavigationModeController = Dependency.get(NavigationModeController.class);
++        mNavigationMode = mNavigationModeController.addListener(mNavigationModeListener);
++        updateNavigationVisibility();
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        getContext().getContentResolver().unregisterContentObserver(mNavigationVisibilityObserver);
++        mNavigationModeController.removeListener(mNavigationModeListener);
++        super.onDetachedFromWindow();
++    }
++
++    @Override
++    protected void onConfigurationChanged(Configuration newConfig) {
++        super.onConfigurationChanged(newConfig);
++        updateNavigationVisibility();
++    }
++
++    private void updateNavigationVisibility() {
++        mHideGestureNavigation = getContext().getDisplayId() == Display.DEFAULT_DISPLAY
++                && mNavigationMode == android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_GESTURAL
++                && Settings.Secure.getIntForUser(getContext().getContentResolver(),
++                        "popsicle_hide_gesture_navigation", 0, UserHandle.USER_CURRENT) == 1
++                && Settings.Secure.getIntForUser(getContext().getContentResolver(),
++                        "popsicle_hide_gesture_navigation_applied", 0, UserHandle.USER_CURRENT) == 1;
++        invalidate();
++    }
++
++    protected boolean shouldHideNavigationHandle() {
++        return mHideGestureNavigation;
++    }
++
++    @Override
+     public void setAlpha(float alpha) {
+         super.setAlpha(alpha);
+         if (alpha > 0f && mRequiresInvalidate) {
+@@ -102,6 +166,9 @@
+     @Override
+     protected void onDraw(Canvas canvas) {
+         super.onDraw(canvas);
++        if (shouldHideNavigationHandle()) {
++            return;
++        }
+ 
+         // Draw that bar
+         int navHeight = getHeight();
+diff --git a/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/QuickswitchOrientedNavHandle.java b/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/QuickswitchOrientedNavHandle.java
+--- a/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/QuickswitchOrientedNavHandle.java
++++ b/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/QuickswitchOrientedNavHandle.java
+@@ -40,7 +40,9 @@
+ 
+     @Override
+     protected void onDraw(Canvas canvas) {
+-        canvas.drawRoundRect(computeHomeHandleBounds(), mRadius, mRadius, mPaint);
++        if (!shouldHideNavigationHandle()) {
++            canvas.drawRoundRect(computeHomeHandleBounds(), mRadius, mRadius, mPaint);
++        }
+     }
+ 
+     public RectF computeHomeHandleBounds() {
+diff --git a/packages/SystemUI/src/com/android/systemui/navigationbar/views/NavigationBarTransitions.java b/packages/SystemUI/src/com/android/systemui/navigationbar/views/NavigationBarTransitions.java
+--- a/packages/SystemUI/src/com/android/systemui/navigationbar/views/NavigationBarTransitions.java
++++ b/packages/SystemUI/src/com/android/systemui/navigationbar/views/NavigationBarTransitions.java
+@@ -20,7 +20,12 @@
+ 
+ import static com.android.systemui.util.Utils.isGesturalModeOnDefaultDisplay;
+ 
++import android.database.ContentObserver;
+ import android.graphics.Rect;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.UserHandle;
++import android.provider.Settings;
+ import android.util.SparseArray;
+ import android.view.View;
+ 
+@@ -67,6 +72,14 @@
+     private boolean mAutoDim;
+     private View mNavButtons;
+     private int mNavBarMode = NAV_BAR_MODE_3BUTTON;
++    private float mBackgroundOverrideAlpha = 1f;
++    private final ContentObserver mNavigationVisibilityObserver =
++            new ContentObserver(new Handler(Looper.getMainLooper())) {
++                @Override
++                public void onChange(boolean selfChange) {
++                    updateBackgroundVisibility();
++                }
++            };
+     private List<DarkIntensityListener> mDarkIntensityListeners;
+ 
+     @Inject
+@@ -82,6 +95,12 @@
+         mAllowAutoDimWallpaperNotVisible = view.getContext().getResources()
+                 .getBoolean(R.bool.config_navigation_bar_enable_auto_dim_no_visible_wallpaper);
+         mDarkIntensityListeners = new ArrayList();
++        view.getContext().getContentResolver().registerContentObserver(Settings.Secure.getUriFor(
++                "popsicle_hide_gesture_navigation"), false, mNavigationVisibilityObserver,
++                UserHandle.USER_ALL);
++        view.getContext().getContentResolver().registerContentObserver(Settings.Secure.getUriFor(
++                "popsicle_hide_gesture_navigation_applied"), false, mNavigationVisibilityObserver,
++                UserHandle.USER_ALL);
+ 
+         mView.addOnLayoutChangeListener(
+                 (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+@@ -104,6 +123,8 @@
+ 
+     @Override
+     public void destroy() {
++        mView.getContext().getContentResolver().unregisterContentObserver(
++                mNavigationVisibilityObserver);
+         mLightTransitionsController.destroy();
+     }
+ 
+@@ -129,7 +150,18 @@
+     }
+ 
+     void setBackgroundOverrideAlpha(float alpha) {
+-        mBarBackground.setOverrideAlpha(alpha);
++        mBackgroundOverrideAlpha = alpha;
++        updateBackgroundVisibility();
++    }
++
++    private void updateBackgroundVisibility() {
++        final boolean hidden = isGesturalModeOnDefaultDisplay(mView.getContext(), mDisplayTracker,
++                mNavBarMode)
++                && Settings.Secure.getIntForUser(mView.getContext().getContentResolver(),
++                        "popsicle_hide_gesture_navigation", 0, UserHandle.USER_CURRENT) == 1
++                && Settings.Secure.getIntForUser(mView.getContext().getContentResolver(),
++                        "popsicle_hide_gesture_navigation_applied", 0, UserHandle.USER_CURRENT) == 1;
++        mBarBackground.setOverrideAlpha(hidden ? 0f : mBackgroundOverrideAlpha);
+     }
+ 
+     @Override
+@@ -210,6 +242,7 @@
+ 
+     public void onNavigationModeChanged(int mode) {
+         mNavBarMode = mode;
++        updateBackgroundVisibility();
+     }
+ 
+     /**
+diff --git a/services/core/java/com/android/server/wm/DisplayPolicy.java b/services/core/java/com/android/server/wm/DisplayPolicy.java
+--- a/services/core/java/com/android/server/wm/DisplayPolicy.java
++++ b/services/core/java/com/android/server/wm/DisplayPolicy.java
+@@ -111,6 +111,7 @@
+ import android.content.Intent;
+ import android.content.res.Configuration;
+ import android.content.res.Resources;
++import android.database.ContentObserver;
+ import android.graphics.Insets;
+ import android.graphics.PixelFormat;
+ import android.graphics.Rect;
+@@ -126,6 +127,7 @@
+ import android.os.SystemProperties;
+ import android.os.Trace;
+ import android.os.UserHandle;
++import android.provider.Settings;
+ import android.util.ArrayMap;
+ import android.util.ArraySet;
+ import android.util.Slog;
+@@ -140,12 +142,12 @@
+ import android.view.Surface;
+ import android.view.View;
+ import android.view.ViewDebug;
++import android.view.WindowInsets.Type.InsetsType;
++import android.view.WindowInsets.Type;
+ import android.view.WindowInsets;
+-import android.view.WindowInsets.Type;
+-import android.view.WindowInsets.Type.InsetsType;
+ import android.view.WindowLayout;
++import android.view.WindowManager.LayoutParams;
+ import android.view.WindowManager;
+-import android.view.WindowManager.LayoutParams;
+ import android.view.WindowManagerGlobal;
+ import android.view.accessibility.AccessibilityManager;
+ import android.window.ClientWindowFrames;
+@@ -434,6 +436,12 @@
+     private final ForceShowNavBarSettingsObserver mForceShowNavBarSettingsObserver;
+     private boolean mForceShowNavigationBarEnabled;
+ 
++    private static final String HIDE_GESTURE_NAVIGATION = "popsicle_hide_gesture_navigation";
++    private static final String HIDE_GESTURE_NAVIGATION_APPLIED =
++            "popsicle_hide_gesture_navigation_applied";
++    private final ContentObserver mHideGestureNavigationObserver;
++    private boolean mHideGestureNavigationBar;
++
+     private class PolicyHandler extends Handler {
+ 
+         PolicyHandler(Looper looper) {
+@@ -738,6 +746,45 @@
+         mForceShowNavBarSettingsObserver.setOnChangeRunnable(this::updateForceShowNavBarSettings);
+         mForceShowNavigationBarEnabled = mForceShowNavBarSettingsObserver.isEnabled();
+         mHandler.post(mForceShowNavBarSettingsObserver::register);
++
++        mHideGestureNavigationObserver = new ContentObserver(mHandler) {
++            @Override
++            public void onChange(boolean selfChange) {
++                updateHideGestureNavigationSettings();
++            }
++        };
++        if (displayContent.isDefaultDisplay) {
++            mHandler.post(() -> {
++                mContext.getContentResolver().registerContentObserver(
++                        Settings.Secure.getUriFor(HIDE_GESTURE_NAVIGATION), false,
++                        mHideGestureNavigationObserver, UserHandle.USER_ALL);
++                mContext.getContentResolver().registerContentObserver(
++                        Settings.Secure.getUriFor(HIDE_GESTURE_NAVIGATION_APPLIED), false,
++                        mHideGestureNavigationObserver, UserHandle.USER_ALL);
++                updateHideGestureNavigationSettings();
++            });
++        }
++    }
++
++    private void updateHideGestureNavigationSettings() {
++        synchronized (mLock) {
++            final boolean hidden = mDisplayContent.isDefaultDisplay
++                    && getCurrentUserResources().getInteger(R.integer.config_navBarInteractionMode)
++                            == android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_GESTURAL
++                    && Settings.Secure.getIntForUser(mContext.getContentResolver(),
++                            HIDE_GESTURE_NAVIGATION, 0, mService.mCurrentUserId) == 1
++                    && Settings.Secure.getIntForUser(mContext.getContentResolver(),
++                            HIDE_GESTURE_NAVIGATION_APPLIED, 0, mService.mCurrentUserId) == 1;
++            if (hidden == mHideGestureNavigationBar) {
++                return;
++            }
++            mHideGestureNavigationBar = hidden;
++            mCachedDecorInsets = null;
++            mDecorInsets.invalidate();
++            mDisplayContent.setLayoutNeeded();
++            mDisplayContent.sendNewConfiguration();
++            mService.mWindowPlacerLocked.requestTraversal();
++        }
+     }
+ 
+     private void updateForceShowNavBarSettings() {
+@@ -1285,11 +1332,19 @@
+     }
+ 
+     @NonNull
+-    private static TriFunction<DisplayFrames, WindowState, Rect, Integer> getFrameProvider(
++    private TriFunction<DisplayFrames, WindowState, Rect, Integer> getFrameProvider(
+             WindowState win, int index, int overrideIndex) {
+         return (displayFrames, windowState, inOutFrame) -> {
+             final LayoutParams lp = win.mAttrs.forRotation(displayFrames.mRotation);
+             final InsetsFrameProvider ifp = lp.providedInsets[index];
++            if (mHideGestureNavigationBar && lp.type == TYPE_NAVIGATION_BAR
++                    && ifp.getType() == Type.navigationBars()
++                    && overrideIndex == INSETS_OVERRIDE_INDEX_INVALID) {
++                // Keep the navigation window and gesture providers at their original size.
++                // IME-specific overrides retain their original frame as well.
++                inOutFrame.setEmpty();
++                return ifp.getFlags();
++            }
+             final Rect displayFrame = displayFrames.mUnrestricted;
+             final Rect safe = displayFrames.mDisplayCutoutSafe;
+             boolean extendByCutout = false;
+@@ -1886,6 +1941,7 @@
+     public void switchUser() {
+         updateCurrentUserResources();
+         updateForceShowNavBarSettings();
++        updateHideGestureNavigationSettings();
+     }
+ 
+     /**
+@@ -1920,6 +1976,7 @@
+         mAllowsSystemBarRemoteInsetsController = res.getBoolean(
+                 R.bool.config_remoteInsetsControllerControlsSystemBars);
+ 
++        updateHideGestureNavigationSettings();
+         updateConfigurationAndScreenSizeDependentBehaviors();
+ 
+         final boolean shouldAttach =
+@@ -3420,6 +3477,8 @@
+         mDisplayContent.mTransitionController.unregisterLegacyListener(mAppTransitionListener);
+         mHandler.post(mGestureNavigationSettingsObserver::unregister);
+         mHandler.post(mForceShowNavBarSettingsObserver::unregister);
++        mHandler.post(() -> mContext.getContentResolver().unregisterContentObserver(
++                mHideGestureNavigationObserver));
+         if (mService.mPointerLocationEnabled) {
+             setPointerLocationEnabled(false);
+         }

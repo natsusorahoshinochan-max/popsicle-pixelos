@@ -1,0 +1,172 @@
+--- a/src/com/android/carrierconfig/DefaultCarrierConfigService.java
++++ b/src/com/android/carrierconfig/DefaultCarrierConfigService.java
+@@ -25,6 +25,8 @@
+ import android.os.SystemProperties;
+ import android.service.carrier.CarrierIdentifier;
+ import android.service.carrier.CarrierService;
++import android.telephony.CarrierConfigManager;
++import android.telephony.SubscriptionManager;
+ import android.telephony.TelephonyManager;
+ import android.text.TextUtils;
+ import android.util.Log;
+@@ -93,7 +95,24 @@
+      */
+     @Override
+     public PersistableBundle onLoadConfig(@Nullable CarrierIdentifier id) {
++        return onLoadConfig(SubscriptionManager.INVALID_SUBSCRIPTION_ID, id);
++    }
++
++    @Override
++    public PersistableBundle onLoadConfig(int subId, @Nullable CarrierIdentifier id) {
+         Log.d(TAG, "Config being fetched");
++        String iccid = null;
++        if (id != null && SubscriptionManager.isValidSubscriptionId(subId)) {
++            TelephonyManager manager = getSystemService(TelephonyManager.class);
++            if (manager != null) {
++                try {
++                    iccid = manager.createForSubscriptionId(subId).getSimSerialNumber();
++                } catch (SecurityException | IllegalStateException e) {
++                    // An unavailable identifier must not broaden a source-specific SIM rule.
++                    Log.w(TAG, "Cannot read SIM identifier for carrier prefix filters");
++                }
++            }
++        }
+ 
+         try {
+             synchronized (this) {
+@@ -104,7 +123,7 @@
+ 
+             XmlPullParser parser = mFactory.newPullParser();
+ 
+-            return loadConfig(parser, id);
++            return loadConfig(parser, id, iccid);
+         }
+         catch (XmlPullParserException e) {
+             Log.e(TAG, "Failed to load config", e);
+@@ -210,6 +229,11 @@
+     }
+ 
+     PersistableBundle loadConfig(XmlPullParser parser, @Nullable CarrierIdentifier id) {
++        return loadConfig(parser, id, null);
++    }
++
++    private PersistableBundle loadConfig(XmlPullParser parser, @Nullable CarrierIdentifier id,
++            @Nullable String iccid) {
+         // OEM customizable filter for carrier requirements not related to hardware/vendor SKU.
+         String sku = getApplicationContext().getResources().getString(R.string.sku_filter);
+ 
+@@ -223,7 +247,7 @@
+             XmlPullParser vendorDefaultsInput =
+                     getApplicationContext().getResources().getXml(R.xml.vendor_defaults);
+             try {
+-                config.putAll(readConfigFromXml(vendorDefaultsInput, id, sku));
++                config.putAll(readConfigFromXml(vendorDefaultsInput, id, sku, iccid));
+             } catch (IOException | XmlPullParserException e) {
+                 Log.e(TAG, "Failed to read vendor_defaults.xml", e);
+             }
+@@ -235,14 +259,31 @@
+         // Treat vendor.xml as if it were appended to the carrier config file we read.
+         XmlPullParser vendorInput = getApplicationContext().getResources().getXml(R.xml.vendor);
+         try {
+-            PersistableBundle vendorConfig = readConfigFromXml(vendorInput, id, sku);
++            PersistableBundle vendorConfig = readConfigFromXml(vendorInput, id, sku, iccid);
+             config.putAll(vendorConfig);
+         }
+         catch (IOException | XmlPullParserException e) {
+             Log.e(TAG, e.toString());
+         }
+ 
++        applyVolteGlobalization(config, id);
+         return config;
++    }
++
++    private static void applyVolteGlobalization(PersistableBundle config, CarrierIdentifier id) {
++        // Converted stock data opts into this policy. Carrier app overrides are applied later by
++        // CarrierConfigLoader, and provisioning, GBA and IMS registration remain framework gates.
++        if (TextUtils.isEmpty(id.getMcc()) || TextUtils.isEmpty(id.getMnc())
++                || !config.getBoolean("carrier_volte_globalization_enable")
++                || config.getBoolean("carrier_volte_unavailable_bool")
++                || config.getBoolean(CarrierConfigManager.KEY_CARRIER_VOLTE_AVAILABLE_BOOL)) {
++            return;
++        }
++        config.putBoolean(CarrierConfigManager.KEY_CARRIER_VOLTE_AVAILABLE_BOOL, true);
++        config.putBoolean(CarrierConfigManager.KEY_ENHANCED_4G_LTE_ON_BY_DEFAULT_BOOL, false);
++        // A default-off capability must remain available for the user to opt in.
++        config.putBoolean(CarrierConfigManager.KEY_HIDE_ENHANCED_4G_LTE_BOOL, false);
++        config.putBoolean(CarrierConfigManager.KEY_EDITABLE_ENHANCED_4G_LTE_BOOL, true);
+     }
+ 
+     /**
+@@ -289,6 +330,12 @@
+      */
+     static PersistableBundle readConfigFromXml(XmlPullParser parser, @Nullable CarrierIdentifier id,
+             String sku) throws IOException, XmlPullParserException {
++        return readConfigFromXml(parser, id, sku, null);
++    }
++
++    private static PersistableBundle readConfigFromXml(XmlPullParser parser,
++            @Nullable CarrierIdentifier id, String sku, @Nullable String iccid)
++            throws IOException, XmlPullParserException {
+         PersistableBundle config = new PersistableBundle();
+ 
+         if (parser == null) {
+@@ -301,7 +348,7 @@
+         while (((event = parser.next()) != XmlPullParser.END_DOCUMENT)) {
+             if (event == XmlPullParser.START_TAG && "carrier_config".equals(parser.getName())) {
+                 // Skip this fragment if it has filters that don't match.
+-                if (!checkFilters(parser, id, sku)) {
++                if (!checkFilters(parser, id, sku, iccid)) {
+                     continue;
+                 }
+                 PersistableBundle configFragment = PersistableBundle.restoreFromXml(parser);
+@@ -348,6 +395,11 @@
+      * @return false if any XML attribute does not match the corresponding value.
+      */
+     static boolean checkFilters(XmlPullParser parser, @Nullable CarrierIdentifier id, String sku) {
++        return checkFilters(parser, id, sku, null);
++    }
++
++    private static boolean checkFilters(XmlPullParser parser, @Nullable CarrierIdentifier id,
++            String sku, @Nullable String iccid) {
+         String vendorSkuProperty = SystemProperties.get(
+             "ro.boot.product.vendor.sku", "");
+         String hardwareSkuProperty = SystemProperties.get(
+@@ -366,6 +418,13 @@
+                 case "gid1":
+                     result = (id == null) || value.equalsIgnoreCase(id.getGid1());
+                     break;
++                case "gid1_prefix":
++                    // Source-specific prefix semantics must not change the standard gid1 filter.
++                    result = id != null && matchesPrefix(id.getGid1(), value);
++                    break;
++                case "iccid_prefix":
++                    result = id != null && matchesPrefix(iccid, value);
++                    break;
+                 case "gid2":
+                     result = (id == null) || value.equalsIgnoreCase(id.getGid2());
+                     break;
+@@ -408,6 +467,11 @@
+             }
+         }
+         return true;
++    }
++
++    private static boolean matchesPrefix(@Nullable String identifier, String prefix) {
++        return !TextUtils.isEmpty(identifier) && !TextUtils.isEmpty(prefix)
++                && identifier.regionMatches(true, 0, prefix, 0, prefix.length());
+     }
+ 
+     /**
+--- a/AndroidManifest.xml
++++ b/AndroidManifest.xml
+@@ -15,8 +15,8 @@
+ -->
+ 
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+-     android:versionCode="1"
+-     android:versionName="1.0.0"
++     android:versionCode="20260930"
++     android:versionName="1.1-popsicle-global"
+      package="com.android.carrierconfig">
+ 
+     <uses-permission android:name="android.permission.READ_PRIVILEGED_PHONE_STATE"/>

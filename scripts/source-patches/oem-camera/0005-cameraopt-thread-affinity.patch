@@ -1,0 +1,108 @@
+diff --git a/core/java/android/os/Process.java b/core/java/android/os/Process.java
+--- a/core/java/android/os/Process.java
++++ b/core/java/android/os/Process.java
+@@ -1388,6 +1388,19 @@
+      * @hide
+      */
+     public static final native long[] getSchedAffinity(int tid);
++
++    /**
++     * Sets the allowed CPU indices for the specified thread. Kernel ownership, cpuset and
++     * online CPU restrictions apply; this does not change the thread's cgroup membership.
++     *
++     * @param tid a positive thread ID
++     * @param cpus a nonempty list of CPU indices, not affinity bit masks
++     * @throws IllegalArgumentException for invalid arguments or a nonexistent thread
++     * @throws SecurityException if the kernel denies access to the thread
++     * @hide
++     */
++    public static final native void setSchedAffinity(int tid, int[] cpus);
++
+ 
+     /**
+      * Set the priority of the calling thread, based on Linux niceness priorities.  See
+diff --git a/core/jni/android_os_ProcessAffinity.h b/core/jni/android_os_ProcessAffinity.h
+new file mode 100644
+--- /dev/null
++++ b/core/jni/android_os_ProcessAffinity.h
+@@ -0,0 +1,38 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#pragma once
++
++#include <cerrno>
++#include <cstddef>
++#include <sched.h>
++#include <sys/types.h>
++
++namespace android::process {
++
++// Return the actual kernel error; never report an ignored request as successful.
++inline int setSchedAffinity(pid_t tid, const int* cpus, size_t count) {
++    if (tid <= 0 || cpus == nullptr || count == 0) return EINVAL;
++    cpu_set_t mask;
++    CPU_ZERO(&mask);
++    for (size_t i = 0; i < count; ++i) {
++        if (cpus[i] < 0 || cpus[i] >= CPU_SETSIZE) return EINVAL;
++        CPU_SET(cpus[i], &mask);
++    }
++    return sched_setaffinity(tid, sizeof(mask), &mask) == 0 ? 0 : errno;
++}
++
++} // namespace android::process
+diff --git a/core/jni/android_util_Process.cpp b/core/jni/android_util_Process.cpp
+--- a/core/jni/android_util_Process.cpp
++++ b/core/jni/android_util_Process.cpp
+@@ -47,6 +47,8 @@
+ #include "android_util_Binder.h"
+ #include <nativehelper/JNIHelp.h>
+ #include "android_os_Debug.h"
++#include "android_os_ProcessAffinity.h"
++#include <nativehelper/ScopedPrimitiveArray.h>
+ 
+ #include <dirent.h>
+ #include <fcntl.h>
+@@ -527,6 +529,21 @@
+     }
+     env->ReleaseLongArrayElements(masks, mask_elements, 0);
+     return masks;
++}
++
++void android_os_Process_setSchedAffinity(JNIEnv* env, jobject clazz, jint tid, jintArray cpus) {
++    if (cpus == nullptr) {
++        jniThrowNullPointerException(env, "cpus must not be null");
++        return;
++    }
++    if (env->GetArrayLength(cpus) == 0) {
++        signalExceptionForError(env, EINVAL, tid);
++        return;
++    }
++    ScopedIntArrayRO indices(env, cpus);
++    if (indices.get() == nullptr) return; // Preserve a pending allocation exception.
++    const int error = android::process::setSchedAffinity(tid, indices.get(), indices.size());
++    if (error != 0) signalExceptionForError(env, error, tid);
+ }
+ 
+ jint android_os_Process_getThreadScheduler(JNIEnv* env, jclass clazz,
+@@ -1374,6 +1391,7 @@
+         {"createProcessGroup", "(II)I", (void*)android_os_Process_createProcessGroup},
+         {"getExclusiveCores", "()[I", (void*)android_os_Process_getExclusiveCores},
+         {"getSchedAffinity", "(I)[J", (void*)android_os_Process_getSchedAffinity},
++        {"setSchedAffinity", "(I[I)V", (void*)android_os_Process_setSchedAffinity},
+         {"setArgV0Native", "(Ljava/lang/String;)V", (void*)android_os_Process_setArgV0},
+         {"setUid", "(I)I", (void*)android_os_Process_setUid},
+         {"setGid", "(I)I", (void*)android_os_Process_setGid},

@@ -1,0 +1,50 @@
+--- a/services/surfaceflinger/CompositionEngine/include/compositionengine/CompositionRefreshArgs.h
++++ b/services/surfaceflinger/CompositionEngine/include/compositionengine/CompositionRefreshArgs.h
+@@ -64,6 +64,9 @@
+     // Controls how the color mode is chosen for an output
+     OutputColorSetting outputColorSetting{OutputColorSetting::kEnhanced};
+ 
++    // Matching popsicle main-panel OEM sRGB profile; never apply it to another output.
++    std::optional<DisplayId> popsicleColorDisplayId;
++
+     // Forces a color mode on the outputs being refreshed
+     ui::ColorMode forceOutputColorMode{ui::ColorMode::NATIVE};
+ 
+--- a/services/surfaceflinger/CompositionEngine/src/Output.cpp
++++ b/services/surfaceflinger/CompositionEngine/src/Output.cpp
+@@ -1149,6 +1149,19 @@
+             break;
+     }
+ 
++    // The matching OEM expert-sRGB request clears the old vendor LUT. Select its
++    // static profile only on the primary panel, retaining AOSP saturation, P3,
++    // HDR and unmanaged/native selection. A global vendor setting affects both
++    // physical displays and must not be used for this device-specific policy.
++    const auto displayId = getDisplayId();
++    if (refreshArgs.popsicleColorDisplayId && displayId &&
++        *displayId == *refreshArgs.popsicleColorDisplayId &&
++        refreshArgs.outputColorSetting == OutputColorSetting::kManaged &&
++        hdrDataSpace == ui::Dataspace::UNKNOWN &&
++        (bestDataSpace == ui::Dataspace::V0_SRGB || bestDataSpace == ui::Dataspace::SRGB)) {
++        intent = static_cast<ui::RenderIntent>(267);
++    }
++
+     ui::ColorMode outMode;
+     ui::Dataspace outDataSpace;
+     ui::RenderIntent outRenderIntent;
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -3357,9 +3357,13 @@
+     refreshArgs.outputs.reserve(displays.size());
+ 
+     std::vector<DisplayId> displayIds;
++    static const bool isPopsicle = base::GetProperty("ro.product.device", "") == "popsicle";
+     for (const auto& [_, display] : displays) {
+         displayIds.push_back(display->getId());
+         display->tracePowerMode();
++        if (isPopsicle && display->isPrimary()) {
++            refreshArgs.popsicleColorDisplayId = display->getId();
++        }
+     }
+     mPowerAdvisor->setDisplays(displayIds);
+ 

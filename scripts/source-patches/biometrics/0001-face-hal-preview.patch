@@ -1,0 +1,426 @@
+diff --git a/res/values/config.xml b/res/values/config.xml
+--- a/res/values/config.xml
++++ b/res/values/config.xml
+@@ -1096,4 +1096,6 @@
+ 
+     <!-- TODO(b/496286136): Whether to force showing the icon on the locale picker screen. -->
+     <bool name="config_force_showing_icon_on_locale_picker_screen">false</bool>
++    <!-- Face HAL owns the enrollment camera and renders into the supplied preview Surface. -->
++    <bool name="config_face_enroll_preview_from_hal">false</bool>
+ </resources>
+diff --git a/src/com/android/settings/biometrics/face/FaceEnrollEnrolling.java b/src/com/android/settings/biometrics/face/FaceEnrollEnrolling.java
+--- a/src/com/android/settings/biometrics/face/FaceEnrollEnrolling.java
++++ b/src/com/android/settings/biometrics/face/FaceEnrollEnrolling.java
+@@ -153,6 +153,21 @@
+                     .commitAllowingStateLoss();
+         }
+         mPreviewFragment.setListener(mListener);
++        mPreviewFragment.setPreviewListener(new FaceEnrollPreviewFragment.PreviewListener() {
++            @Override
++            public void onPreviewAvailable(FaceEnrollPreviewSurface preview) {
++                if (mSidecar instanceof FaceEnrollSidecar) {
++                    ((FaceEnrollSidecar) mSidecar).setPreviewSurface(preview);
++                }
++            }
++
++            @Override
++            public void onPreviewUnavailable(FaceEnrollPreviewSurface preview) {
++                if (mSidecar instanceof FaceEnrollSidecar) {
++                    ((FaceEnrollSidecar) mSidecar).clearPreviewSurface(preview);
++                }
++            }
++        });
+     }
+ 
+     @Override
+diff --git a/src/com/android/settings/biometrics/face/FaceEnrollPreviewFragment.java b/src/com/android/settings/biometrics/face/FaceEnrollPreviewFragment.java
+--- a/src/com/android/settings/biometrics/face/FaceEnrollPreviewFragment.java
++++ b/src/com/android/settings/biometrics/face/FaceEnrollPreviewFragment.java
+@@ -58,6 +58,20 @@
+ 
+     private Handler mHandler = new Handler(Looper.getMainLooper());
+     private CameraManager mCameraManager;
++    private boolean mHalPreview;
++    private boolean mPreviewStarted;
++    private FaceEnrollPreviewSurface mHalPreviewSurface;
++    private SurfaceTexture mHalPreviewTexture;
++    private PreviewListener mPreviewListener;
++
++    interface PreviewListener {
++        void onPreviewAvailable(FaceEnrollPreviewSurface preview);
++        void onPreviewUnavailable(FaceEnrollPreviewSurface preview);
++    }
++
++    void setPreviewListener(PreviewListener listener) {
++        mPreviewListener = listener;
++    }
+     private String mCameraId;
+     private CameraDevice mCameraDevice;
+     private CaptureRequest.Builder mPreviewRequestBuilder;
+@@ -90,18 +104,31 @@
+         @Override
+         public void onSurfaceTextureAvailable(
+                 SurfaceTexture surfaceTexture, int width, int height) {
+-            openCamera(width, height);
++            if (mHalPreview) {
++                startHalPreview(surfaceTexture);
++            } else {
++                openCamera(width, height);
++            }
+         }
+ 
+         @Override
+         public void onSurfaceTextureSizeChanged(
+                 SurfaceTexture surfaceTexture, int width, int height) {
+             // Shouldn't be called, but do this for completeness.
+-            configureTransform(width, height);
++            if (!mHalPreview) {
++                configureTransform(width, height);
++            }
+         }
+ 
+         @Override
+         public boolean onSurfaceTextureDestroyed(SurfaceTexture surfaceTexture) {
++            if (mHalPreview && mHalPreviewTexture == surfaceTexture && mHalPreviewSurface != null) {
++                stopHalPreview();
++                mHalPreviewSurface.detachTexture();
++                mHalPreviewSurface = null;
++                mHalPreviewTexture = null;
++                return false; // Release after the HAL operation acknowledges cancellation.
++            }
+             return true;
+         }
+ 
+@@ -196,7 +223,10 @@
+         mAnimationDrawable = new FaceEnrollAnimationDrawable(getContext(), mAnimationListener);
+         mCircleView.setImageDrawable(mAnimationDrawable);
+ 
+-        mCameraManager = (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
++        mHalPreview = getResources().getBoolean(R.bool.config_face_enroll_preview_from_hal);
++        if (!mHalPreview) {
++            mCameraManager = (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
++        }
+     }
+ 
+     @Override
+@@ -207,17 +237,46 @@
+         // available, and "onSurfaceTextureAvailable" will not be called. In that case, we can open
+         // a camera and start preview from here (otherwise, we wait until the surface is ready in
+         // the SurfaceTextureListener).
++        mTextureView.setSurfaceTextureListener(mSurfaceTextureListener);
+         if (mTextureView.isAvailable()) {
+-            openCamera(mTextureView.getWidth(), mTextureView.getHeight());
++            if (mHalPreview) {
++                startHalPreview(mTextureView.getSurfaceTexture());
++            } else {
++                openCamera(mTextureView.getWidth(), mTextureView.getHeight());
++            }
++        }
++    }
++
++    @Override
++    public void onPause() {
++        if (mHalPreview) {
++            stopHalPreview();
+         } else {
+-            mTextureView.setSurfaceTextureListener(mSurfaceTextureListener);
+-        }
+-    }
+-
+-    @Override
+-    public void onPause() {
++            closeCamera();
++        }
+         super.onPause();
+-        closeCamera();
++    }
++
++    private void startHalPreview(SurfaceTexture texture) {
++        if (!isResumed() || mPreviewStarted || mPreviewListener == null) {
++            return;
++        }
++        if (mHalPreviewSurface == null || mHalPreviewTexture != texture
++                || !mHalPreviewSurface.reopen()) {
++            mHalPreviewSurface = new FaceEnrollPreviewSurface(texture);
++            mHalPreviewTexture = texture;
++        }
++        mPreviewStarted = true;
++        mPreviewListener.onPreviewAvailable(mHalPreviewSurface);
++    }
++
++    private void stopHalPreview() {
++        if (mHalPreviewSurface == null || !mPreviewStarted) {
++            return;
++        }
++        mPreviewStarted = false;
++        mPreviewListener.onPreviewUnavailable(mHalPreviewSurface);
++        mHalPreviewSurface.close();
+     }
+ 
+     @Override
+diff --git a/src/com/android/settings/biometrics/face/FaceEnrollPreviewSurface.java b/src/com/android/settings/biometrics/face/FaceEnrollPreviewSurface.java
+new file mode 100644
+--- /dev/null
++++ b/src/com/android/settings/biometrics/face/FaceEnrollPreviewSurface.java
+@@ -0,0 +1,91 @@
++/*
++ * Copyright (C) 2018 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License
++ */
++
++package com.android.settings.biometrics.face;
++
++import android.graphics.SurfaceTexture;
++import android.view.Surface;
++
++/** Holds the preview producer and, after view destruction, its consumer until HAL completion. */
++final class FaceEnrollPreviewSurface {
++    private final SurfaceTexture mTexture;
++    private final Surface mSurface;
++    private boolean mInUse;
++    private boolean mClosed;
++    private boolean mTextureDetached;
++    private boolean mSurfaceReleased;
++    private boolean mTextureReleased;
++
++    FaceEnrollPreviewSurface(SurfaceTexture texture) {
++        this(texture, new Surface(texture));
++    }
++
++    FaceEnrollPreviewSurface(SurfaceTexture texture, Surface surface) {
++        mTexture = texture;
++        mSurface = surface;
++    }
++
++    boolean reopen() {
++        if (mTextureDetached || mSurfaceReleased) {
++            return false;
++        }
++        mClosed = false;
++        return true;
++    }
++
++    boolean isAvailable() {
++        return !mClosed && !mInUse && mSurface.isValid();
++    }
++
++    Surface acquire() {
++        if (!isAvailable()) {
++            throw new IllegalStateException("Preview is closed or already in use");
++        }
++        mInUse = true;
++        return mSurface;
++    }
++
++    void finish() {
++        mInUse = false;
++        releaseIfUnused();
++    }
++
++    void close() {
++        mClosed = true;
++        releaseIfUnused();
++    }
++
++    /** TextureView returned false from onSurfaceTextureDestroyed; this owner now releases it. */
++    void detachTexture() {
++        mTextureDetached = true;
++        mClosed = true;
++        releaseIfUnused();
++    }
++
++    private void releaseIfUnused() {
++        if (mInUse || !mClosed) {
++            return;
++        }
++        if (!mSurfaceReleased) {
++            mSurface.release();
++            mSurfaceReleased = true;
++        }
++        if (mTextureDetached && !mTextureReleased) {
++            mTexture.release();
++            mTextureReleased = true;
++        }
++    }
++}
+diff --git a/src/com/android/settings/biometrics/face/FaceEnrollSidecar.java b/src/com/android/settings/biometrics/face/FaceEnrollSidecar.java
+--- a/src/com/android/settings/biometrics/face/FaceEnrollSidecar.java
++++ b/src/com/android/settings/biometrics/face/FaceEnrollSidecar.java
+@@ -20,7 +20,9 @@
+ import android.app.settings.SettingsEnums;
+ import android.content.Intent;
+ import android.hardware.face.FaceManager;
+-
++import android.hardware.biometrics.BiometricFaceConstants;
++
++import com.android.settings.R;
+ import com.android.settings.biometrics.BiometricEnrollSidecar;
+ 
+ import java.util.Arrays;
+@@ -35,6 +37,14 @@
+     private FaceUpdater mFaceUpdater;
+ 
+     private Intent mIntent;
++    private boolean mHalPreview;
++    private boolean mStarted;
++    private boolean mEnrollmentRequested;
++    private boolean mPreviewCancellation;
++    private boolean mCompleted;
++    private long mPreviewGeneration;
++    private FaceEnrollPreviewSurface mPreview;
++    private FaceEnrollPreviewSurface mActivePreview;
+ 
+     public FaceEnrollSidecar(int[] disabledFeatures, Intent intent) {
+         mDisabledFeatures = Arrays.copyOf(disabledFeatures, disabledFeatures.length);
+@@ -45,13 +55,126 @@
+     public void onAttach(Activity activity) {
+         super.onAttach(activity);
+         mFaceUpdater = new FaceUpdater(activity);
++        mHalPreview = activity.getResources().getBoolean(R.bool.config_face_enroll_preview_from_hal);
++    }
++
++    @Override
++    public void onStart() {
++        mStarted = true;
++        super.onStart();
++    }
++
++    @Override
++    public void onStop() {
++        mStarted = false;
++        super.onStop();
++    }
++
++    void setPreviewSurface(FaceEnrollPreviewSurface preview) {
++        if (mPreview != null && mPreview != preview) {
++            clearPreviewSurface(mPreview);
++        }
++        mPreview = preview;
++        if (mStarted && mEnrollmentRequested) {
++            startEnrollment();
++        }
++    }
++
++    void clearPreviewSurface(FaceEnrollPreviewSurface preview) {
++        if (mPreview != preview) {
++            return;
++        }
++        mPreview = null;
++        if (mActivePreview == preview) {
++            boolean requested = mEnrollmentRequested;
++            mPreviewCancellation = true;
++            cancelEnrollment();
++            mEnrollmentRequested = requested;
++        }
++    }
++
++    @Override
++    public boolean cancelEnrollment() {
++        mEnrollmentRequested = false;
++        return super.cancelEnrollment();
+     }
+ 
+     @Override
+     public void startEnrollment() {
++        if (mCompleted) {
++            return;
++        }
++        mEnrollmentRequested = true;
++        if (!mHalPreview) {
++            super.startEnrollment();
++            mFaceUpdater.enroll(mUserId, mToken, mEnrollmentCancel,
++                    mEnrollmentCallback, mDisabledFeatures, mIntent);
++            return;
++        }
++        if (!mStarted || mActivePreview != null || mPreview == null || !mPreview.isAvailable()) {
++            return;
++        }
+         super.startEnrollment();
+-        mFaceUpdater.enroll(mUserId, mToken, mEnrollmentCancel,
+-                mEnrollmentCallback, mDisabledFeatures, mIntent);
++        final FaceEnrollPreviewSurface active = mPreview;
++        mActivePreview = active;
++        mPreviewCancellation = false;
++        try {
++            mFaceUpdater.enroll(mUserId, mToken, mEnrollmentCancel,
++                    createPreviewCallback(active, ++mPreviewGeneration), mDisabledFeatures, active.acquire(), false,
++                    mIntent);
++        } catch (RuntimeException e) {
++            // Synchronous submission failed; no HAL operation owns this local reference.
++            mActivePreview = null;
++            active.finish();
++            super.cancelEnrollment();
++            throw e;
++        }
++    }
++
++    private FaceManager.EnrollmentCallback createPreviewCallback(
++            FaceEnrollPreviewSurface active, long generation) {
++        return new FaceManager.EnrollmentCallback() {
++            @Override
++            public void onEnrollmentProgress(int remaining) {
++                if (mActivePreview != active || mPreviewGeneration != generation) {
++                    return;
++                }
++                if (remaining == 0) {
++                    mCompleted = true;
++                    mEnrollmentRequested = false;
++                    mActivePreview = null;
++                    active.finish();
++                }
++                FaceEnrollSidecar.super.onEnrollmentProgress(remaining);
++            }
++
++            @Override
++            public void onEnrollmentHelp(int helpMsgId, CharSequence helpString) {
++                if (mActivePreview == active && mPreviewGeneration == generation
++                        && !mPreviewCancellation) {
++                    FaceEnrollSidecar.super.onEnrollmentHelp(helpMsgId, helpString);
++                }
++            }
++
++            @Override
++            public void onEnrollmentError(int errMsgId, CharSequence errString) {
++                if (mActivePreview != active || mPreviewGeneration != generation) {
++                    return;
++                }
++                boolean expectedCancellation = mPreviewCancellation
++                        && errMsgId == BiometricFaceConstants.FACE_ERROR_CANCELED;
++                mActivePreview = null;
++                mPreviewCancellation = false;
++                active.finish();
++                if (!expectedCancellation) {
++                    mEnrollmentRequested = false;
++                    FaceEnrollSidecar.super.onEnrollmentError(errMsgId, errString);
++                } else if (mStarted && mEnrollmentRequested) {
++                    // The old HAL operation has acknowledged cancellation before replacement.
++                    startEnrollment();
++                }
++            }
++        };
+     }
+ 
+     private FaceManager.EnrollmentCallback mEnrollmentCallback
+diff --git a/src/com/android/settings/biometrics/face/FaceUpdater.java b/src/com/android/settings/biometrics/face/FaceUpdater.java
+--- a/src/com/android/settings/biometrics/face/FaceUpdater.java
++++ b/src/com/android/settings/biometrics/face/FaceUpdater.java
+@@ -64,7 +64,7 @@
+                 userId,
+                 hardwareAuthToken,
+                 cancel,
+-                new NotifyingEnrollmentCallback(mContext, callback),
++                callback,
+                 disabledFeatures,
+                 null,
+                 false,

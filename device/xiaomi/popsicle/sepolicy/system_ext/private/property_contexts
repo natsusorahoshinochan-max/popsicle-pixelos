@@ -1,0 +1,9 @@
+# Original system-owned scene properties consumed by the stock camera HAL.
+# Exact entries override broad vendor camera/miface prefixes without allowing vendor writes.
+persist.vendor.vcb.video u:object_r:exported_system_prop:s0 exact bool
+persist.vendor.vcb.snapshot u:object_r:exported_system_prop:s0 exact bool
+persist.vendor.vcb.activity u:object_r:exported_system_prop:s0 exact int
+persist.vendor.miface.registration.scenes u:object_r:exported_system_prop:s0 exact bool
+persist.vendor.camera.3rdhighResolutionBlob.scenes u:object_r:exported_system_prop:s0 exact bool
+persist.vendor.camera.3rdvideocall.scenes u:object_r:exported_system_prop:s0 exact bool
+persist.vendor.camera.3rdlive.scenes u:object_r:exported_system_prop:s0 exact bool

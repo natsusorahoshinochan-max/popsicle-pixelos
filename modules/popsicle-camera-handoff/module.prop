@@ -1,0 +1,6 @@
+id=popsicle-camera-handoff
+name=Popsicle Camera Screen Handoff
+version=0.1
+versionCode=1
+author=Kanoe
+description=PixelOS Android 17 rear-to-main camera lifecycle repair; ROM-built platform-signed camera and matching preoptimization.

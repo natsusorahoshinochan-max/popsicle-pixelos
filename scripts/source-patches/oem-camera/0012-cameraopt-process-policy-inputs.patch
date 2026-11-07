@@ -1,0 +1,221 @@
+diff --git a/services/core/java/com/android/server/am/OemProcessProtectionState.java b/services/core/java/com/android/server/am/OemProcessProtectionState.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/am/OemProcessProtectionState.java
+@@ -0,0 +1,142 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.am;
++
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++/** Mutable original process-protection lists; the caller supplies the real boot inputs. */
++final class OemProcessProtectionState {
++    private final Set<String> mStaticPackages;
++    private final Set<String> mStaticProcesses;
++    private final List<String> mSecretlyProtected;
++    private final Set<String> mOnePushBlocked = new HashSet<>();
++    private final boolean mOnePushEnabled;
++    private final List<String> mCloudWhiteList = new ArrayList<>();
++    private final Map<String, Integer> mAppProtectMap = new HashMap<>();
++    private final Map<String, Long> mFastBootAppMap = new HashMap<>();
++
++    OemProcessProtectionState(Collection<String> staticPackages,
++            Collection<String> staticProcesses, List<String> secretlyProtected,
++            boolean onePushEnabled, long totalMemoryBytes) {
++        mStaticPackages = new HashSet<>(staticPackages);
++        mStaticProcesses = new HashSet<>(staticProcesses);
++        mSecretlyProtected = new ArrayList<>(secretlyProtected);
++        mOnePushEnabled = onePushEnabled;
++        long memoryGiB = totalMemoryBytes / 0x40000000L;
++        long threshold = memoryGiB < 4 ? 0xc8000L
++                : memoryGiB < 8 ? 0x177000L : 0x1f4000L;
++        mFastBootAppMap.put("com.tencent.mm", threshold);
++        mFastBootAppMap.put("com.tencent.mobileqq", threshold);
++        for (String name : List.of("com.miui.bugreport", "com.miui.virtualsim",
++                "com.miui.touchassistant", "com.xiaomi.joyose", "com.miui.tsmclient",
++                "com.miui.powerkeeper", "com.miui.powerinsight")) {
++            mAppProtectMap.put(name, 3);
++        }
++        mAppProtectMap.put("com.xiaomi.bluetooth", 1);
++        mAppProtectMap.put("com.xiaomi.xmsf", 1);
++    }
++
++    synchronized List<String> getCloudWhiteList() {
++        return new ArrayList<>(mCloudWhiteList);
++    }
++
++    synchronized Integer getAppProtectionLevel(String packageName) {
++        return mAppProtectMap.get(packageName);
++    }
++
++    synchronized Long getFastBootThreshold(String packageName) {
++        return mFastBootAppMap.get(packageName);
++    }
++
++    /** Matches the original four updates in order, including partial state on failure. */
++    void updateCloudData(List<String> whiteList, Map<String, Integer> appProtectMap,
++            List<String> fastBootList, List<String> secretlyProtected) {
++        synchronized (this) {
++            mCloudWhiteList.clear();
++            if (whiteList != null) mCloudWhiteList.addAll(whiteList);
++        }
++        synchronized (this) {
++            mAppProtectMap.clear();
++            if (appProtectMap != null) mAppProtectMap.putAll(appProtectMap);
++        }
++        replaceFastBootList(fastBootList);
++        replaceSecretlyProtected(secretlyProtected);
++    }
++
++    private synchronized void replaceFastBootList(List<String> packages) {
++        if (packages == null || packages.isEmpty()) {
++            mFastBootAppMap.clear();
++        } else if (!mFastBootAppMap.keySet().equals(new HashSet<>(packages))) {
++            Map<String, Long> updated = new HashMap<>();
++            for (String packageName : packages) {
++                // Original unboxes the old value: an unknown package fails before replacement.
++                long threshold = mFastBootAppMap.get(packageName);
++                updated.put(packageName, threshold > 0 ? threshold : 0x1f400000L);
++            }
++            mFastBootAppMap.clear();
++            mFastBootAppMap.putAll(updated);
++        }
++    }
++
++    boolean isInStaticWhiteList(String processName, String packageName) {
++        return mStaticProcesses.contains(processName) || mStaticPackages.contains(packageName);
++    }
++
++    synchronized boolean isSecretlyProtected(String processName) {
++        return mSecretlyProtected.contains(processName);
++    }
++
++    synchronized boolean isOnePushBlocked(String processName) {
++        if (!mOnePushEnabled || processName == null) return false;
++        for (String packageName : mOnePushBlocked) {
++            // Original ProcessPolicy uses substring matching, not package equality.
++            if (processName.contains(packageName)) return true;
++        }
++        return false;
++    }
++
++    synchronized boolean shouldSkipLockedPromotion(String processName) {
++        return mSecretlyProtected.contains(processName) && !isOnePushBlocked(processName);
++    }
++
++    synchronized void replaceSecretlyProtected(List<String> processes) {
++        mSecretlyProtected.clear();
++        // Original null/empty cloud data clears the old list.
++        if (processes != null) mSecretlyProtected.addAll(processes);
++    }
++
++    /** Caller must perform the original live-process promotions for the returned names. */
++    synchronized List<String> setOnePushBlocked(String packageName, boolean blocked) {
++        List<String> affected = new ArrayList<>();
++        if (packageName == null) return affected;
++        if (blocked) {
++            mOnePushBlocked.add(packageName);
++        } else {
++            mOnePushBlocked.remove(packageName);
++        }
++        for (String processName : mSecretlyProtected) {
++            if (processName.contains(packageName)) affected.add(processName);
++        }
++        return affected;
++    }
++}
+diff --git a/services/core/java/com/android/server/am/OemProcessPolicyConfig.java b/services/core/java/com/android/server/am/OemProcessPolicyConfig.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/am/OemProcessPolicyConfig.java
+@@ -0,0 +1,69 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.am;
++
++import android.os.Process;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import java.io.File;
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
++import java.nio.file.Files;
++import java.util.ArrayList;
++import java.util.List;
++
++/** Loads the ordinary-edition lists extracted from the matching original firmware. */
++final class OemProcessPolicyConfig {
++    static final File SYSTEM_CONFIG = new File("/system_ext/etc/popsicle-process-policy.json");
++
++    private OemProcessPolicyConfig() {}
++
++    static OemProcessProtectionState load(File file, boolean onePushEnabled)
++            throws IOException, JSONException {
++        JSONObject root = new JSONObject(Files.readString(file.toPath(), StandardCharsets.UTF_8));
++        if (!(root.get("format") instanceof Integer) || root.getInt("format") != 1) {
++            throw new JSONException("Unsupported process-policy format");
++        }
++        JSONObject arrays = root.getJSONObject("arrays");
++        List<String> packages = readList(arrays, "package_static_white_list_base");
++        packages.addAll(readList(arrays, "package_static_white_list"));
++        List<String> processes = readList(arrays, "process_static_white_list_base");
++        processes.addAll(readList(arrays, "process_static_white_list"));
++        List<String> secret = readList(arrays, "process_secretly_protect_list");
++        if (arrays.length() != 5) {
++            throw new JSONException("Expected only ordinary-edition process-policy arrays");
++        }
++        return new OemProcessProtectionState(packages, processes, secret, onePushEnabled,
++                Process.getTotalMemory());
++    }
++
++    private static List<String> readList(JSONObject arrays, String name) throws JSONException {
++        JSONArray values = arrays.getJSONArray(name);
++        List<String> result = new ArrayList<>(values.length());
++        for (int i = 0; i < values.length(); i++) {
++            Object value = values.get(i);
++            if (!(value instanceof String)) {
++                throw new JSONException("Expected process-policy string in " + name);
++            }
++            result.add((String) value);
++        }
++        return result;
++    }
++}

@@ -1,0 +1,6 @@
+id=popsicle-rear-boot-fix
+name=PixelOS popsicle Rear Boot Fix
+version=v0.1
+versionCode=1
+author=Kanoe
+description=Matching-ROM candidate: initial display transaction ordering and original MiSight SDK for the rear launcher. Reboot required.

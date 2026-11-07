@@ -1,0 +1,10 @@
+# Fixed PixelOS ROM production patch order.
+build/make f44b2fc3af631ab64b8ceb8df46b16172e6cc7b2 pixelos-image-build.patch
+prebuilts/build-tools 9b6c8c6a2f582a9d7817fd8275c8014959c60cc4 stock-vbmeta/avb-openssl-consumer.patch
+external/selinux a8c5e74f85f869bf236a01ba24181b78f5e39a52 firmware-filesystems/selabel-lookup-host.patch
+external/erofs-utils abbde14092ad3abd8908b864fa9b04685820577b firmware-filesystems/host-tools.patch
+build/soong 321ecf4fc740482603b917c5de30a0e27e97595e firmware-filesystems/vendor-build-prop-provider.soong.patch
+build/soong 321ecf4fc740482603b917c5de30a0e27e97595e firmware-filesystems/dlkm-build-prop-provider.soong.patch
+build/soong 321ecf4fc740482603b917c5de30a0e27e97595e user-build/user-properties.soong.patch
+system/sepolicy 99c58a7cc9a44fe33c93808452d018e756d84753 pixelos-managed-policy.patch
+external/tinyxml2 33ba115074c80a720826efffab1937d5b355c3b8 tinyxml-vendor-abi/0001-vendor-layout.patch

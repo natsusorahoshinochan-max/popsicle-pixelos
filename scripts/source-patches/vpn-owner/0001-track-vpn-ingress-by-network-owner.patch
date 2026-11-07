@@ -1,0 +1,660 @@
+diff --git a/service/src/com/android/server/ConnectivityService.java b/service/src/com/android/server/ConnectivityService.java
+--- a/service/src/com/android/server/ConnectivityService.java
++++ b/service/src/com/android/server/ConnectivityService.java
+@@ -6121,6 +6121,10 @@
+ 
+         if (!mNetworkAgentInfos.contains(nai)) return;
+ 
++        // All disconnect paths, including agent/channel failure, retire this registration.
++        // Reusing an interface name or netId does not transfer ownership to the old network.
++        if (nai.isVPN()) mPermissionMonitor.unregisterVpnNetwork(nai);
++
+         if (DBG) {
+             log(nai.toShortString() + " disconnected, was satisfying " + nai.numNetworkRequests());
+         }
+@@ -7143,8 +7147,7 @@
+             Set<Integer> newDelegateBypassUids) {
+         forEachNetworkAgentInfo(vpnNai -> {
+             if (!vpnNai.isVPN()) return;
+-            updateVpnFiltering(vpnNai.linkProperties, vpnNai.linkProperties, vpnNai,
+-                    oldDelegateBypassUids, newDelegateBypassUids);
++            updateVpnFiltering(vpnNai.linkProperties, vpnNai, newDelegateBypassUids);
+         });
+     }
+ 
+@@ -8403,8 +8406,7 @@
+         forEachNetworkAgentInfo(nai -> {
+             if (nai.isVPN()) {
+                 Set<Integer> delegateBypassUids = getAllCaptivePortalDelegateUids();
+-                updateVpnFiltering(nai.linkProperties, nai.linkProperties, nai, delegateBypassUids,
+-                        delegateBypassUids, true /* force */);
++                updateVpnFiltering(nai.linkProperties, nai, delegateBypassUids);
+             }
+         });
+         reconcileVpnRequirements();
+@@ -10594,6 +10596,7 @@
+             handleUpdateLocalNetworkConfig(nai, null /* oldConfig */, nai.localNetworkConfig);
+         }
+         nai.notifyRegistered(networkMonitor);
++        if (nai.isVPN()) mPermissionMonitor.registerVpnNetwork(nai);
+         NetworkInfo networkInfo = nai.networkInfo;
+         updateNetworkInfo(nai, networkInfo);
+         maybeUpdateVpnUids(nai, null, nai.networkCapabilities);
+@@ -10777,7 +10780,7 @@
+         // new interface (the interface name -> index map becomes initialized)
+         if (networkAgent.isVPN()) {
+             Set<Integer> delegateBypassUids = getAllCaptivePortalDelegateUids();
+-            updateVpnFiltering(newLp, oldLp, networkAgent, delegateBypassUids, delegateBypassUids);
++            updateVpnFiltering(newLp, networkAgent, delegateBypassUids);
+         }
+ 
+         updateIngressToVpnAddressFiltering(newLp, oldLp, networkAgent);
+@@ -11637,50 +11640,24 @@
+         return isPrefixLocal(routeDestination);
+     }
+ 
+-    private void updateVpnFiltering(@NonNull LinkProperties newLp, @Nullable LinkProperties oldLp,
+-            @NonNull NetworkAgentInfo nai, Set<Integer> oldDelegateBypassUids,
+-            Set<Integer> newDelegateBypassUids) {
+-        updateVpnFiltering(newLp, oldLp, nai, oldDelegateBypassUids, newDelegateBypassUids,
+-                false /* force */);
+-    }
+-
+-    private void updateVpnFiltering(@NonNull LinkProperties newLp, @Nullable LinkProperties oldLp,
+-            @NonNull NetworkAgentInfo nai, Set<Integer> oldDelegateBypassUids,
+-            Set<Integer> newDelegateBypassUids, boolean force) {
+-        final String oldIface = getVpnIsolationInterface(nai, nai.networkCapabilities, oldLp);
+-        final String newIface = getVpnIsolationInterface(nai, nai.networkCapabilities, newLp);
+-        final boolean wasFiltering = requiresVpnAllowRule(nai, oldLp, oldIface);
+-        final boolean needsFiltering = requiresVpnAllowRule(nai, newLp, newIface);
+-
+-        if (!wasFiltering && !needsFiltering) {
+-            // Nothing to do.
+-            return;
+-        }
+-
+-        if (!force && Objects.equals(oldIface, newIface) && (wasFiltering == needsFiltering)
+-                && oldDelegateBypassUids.equals(newDelegateBypassUids)) {
+-            // Nothing changed.
+-            return;
+-        }
+-
+-        final Set<UidRange> ranges = nai.networkCapabilities.getUidRanges();
+-        if (ranges == null || ranges.isEmpty()) {
+-            return;
+-        }
+-
+-        final int vpnAppUid = nai.networkCapabilities.getOwnerUid();
+-        // TODO: this create a window of opportunity for apps to receive traffic between the time
+-        // when the old rules are removed and the time when new rules are added. To fix this,
+-        // make eBPF support two allowlisted interfaces so here new rules can be added before the
+-        // old rules are being removed.
+-        if (wasFiltering) {
+-            mPermissionMonitor.onVpnUidRangesRemoved(oldIface, ranges, vpnAppUid,
+-                    oldDelegateBypassUids);
+-        }
+-        if (needsFiltering) {
+-            mPermissionMonitor.onVpnUidRangesAdded(newIface, ranges, vpnAppUid,
+-                    newDelegateBypassUids);
+-        }
++    private void updateVpnFiltering(@NonNull LinkProperties lp,
++            @NonNull NetworkAgentInfo nai, Set<Integer> delegatedBypassUids) {
++        setVpnFiltering(nai, nai.networkCapabilities, lp, delegatedBypassUids);
++    }
++
++    private void setVpnFiltering(@NonNull NetworkAgentInfo nai,
++            @Nullable NetworkCapabilities nc, @NonNull LinkProperties lp,
++            Set<Integer> delegatedBypassUids) {
++        if (!nai.isVPN()) return;
++        final String iface = getVpnIsolationInterface(nai, nc, lp);
++        final Set<UidRange> ranges = nc == null ? null : nc.getUidRanges();
++        // A failed native creation cannot take over from a live predecessor. An empty source
++        // keeps the fixed registration generation until the network can carry traffic.
++        // PermissionMonitor ignores updates for owners that have already been retired.
++        final boolean filter = nai.isCreated() && !nai.isDestroyed() && ranges != null
++                && requiresVpnAllowRule(nai, lp, iface);
++        mPermissionMonitor.setVpnNetwork(nai, iface, filter ? ranges : Set.of(),
++                nc == null ? Process.INVALID_UID : nc.getOwnerUid(), delegatedBypassUids);
+     }
+ 
+     /**
+@@ -12385,10 +12362,12 @@
+     private void maybeUpdateVpnUids(@NonNull NetworkAgentInfo nai,
+             @Nullable NetworkCapabilities prevNc, @Nullable NetworkCapabilities newNc) {
+         if (!nai.isVPN()) return;
+-        Set<UidRange> prevRanges = null == prevNc ? null : prevNc.getUidRanges();
+-        Set<UidRange> newRanges = null == newNc ? null : newNc.getUidRanges();
+-        if (null == prevRanges) prevRanges = new ArraySet<>();
+-        if (null == newRanges) newRanges = new ArraySet<>();
++        final Set<UidRange> prevUids = prevNc == null ? null : prevNc.getUidRanges();
++        final Set<UidRange> newUids = newNc == null ? null : newNc.getUidRanges();
++        final Set<UidRange> prevRanges = prevUids == null ? new ArraySet<>()
++                : new ArraySet<>(prevUids);
++        final Set<UidRange> newRanges = newUids == null ? new ArraySet<>()
++                : new ArraySet<>(newUids);
+         final Set<UidRange> prevRangesCopy = new ArraySet<>(prevRanges);
+ 
+         prevRanges.removeAll(newRanges);
+@@ -12417,29 +12396,8 @@
+             if (!prevRanges.isEmpty()) {
+                 updateVpnUidRanges(false, nai, prevRanges);
+             }
+-            final String oldIface = getVpnIsolationInterface(nai, prevNc, nai.linkProperties);
+-            final String newIface = getVpnIsolationInterface(nai, newNc, nai.linkProperties);
+-            final boolean wasFiltering = requiresVpnAllowRule(nai, nai.linkProperties, oldIface);
+-            final boolean shouldFilter = requiresVpnAllowRule(nai, nai.linkProperties, newIface);
+-            // For VPN uid interface filtering, old ranges need to be removed before new ranges can
+-            // be added, due to the range being expanded and stored as individual UIDs. For example
+-            // the UIDs might be updated from [0, 99999] to ([0, 10012], [10014, 99999]) which means
+-            // prevRanges = [0, 99999] while newRanges = [0, 10012], [10014, 99999]. If prevRanges
+-            // were added first and then newRanges got removed later, there would be only one uid
+-            // 10013 left. A consequence of removing old ranges before adding new ranges is that
+-            // there is now a window of opportunity when the UIDs are not subject to any filtering.
+-            // Note that this is in contrast with the (more robust) update of VPN routing rules
+-            // above, where the addition of new ranges happens before the removal of old ranges.
+-            // TODO Fix this window by computing an accurate diff on Set<UidRange>, so the old range
+-            // to be removed will never overlap with the new range to be added.
+-            if (wasFiltering && !prevRanges.isEmpty()) {
+-                mPermissionMonitor.onVpnUidRangesRemoved(oldIface, prevRanges,
+-                        prevNc.getOwnerUid(), getAllCaptivePortalDelegateUids());
+-            }
+-            if (shouldFilter && !newRanges.isEmpty()) {
+-                mPermissionMonitor.onVpnUidRangesAdded(newIface, newRanges, newNc.getOwnerUid(),
+-                        getAllCaptivePortalDelegateUids());
+-            }
++            setVpnFiltering(nai, newNc, nai.linkProperties,
++                    getAllCaptivePortalDelegateUids());
+         } catch (Exception e) {
+             // Never crash!
+             loge("Exception in updateVpnUids: ", e);
+diff --git a/service/src/com/android/server/connectivity/PermissionMonitor.java b/service/src/com/android/server/connectivity/PermissionMonitor.java
+--- a/service/src/com/android/server/connectivity/PermissionMonitor.java
++++ b/service/src/com/android/server/connectivity/PermissionMonitor.java
+@@ -109,6 +109,7 @@
+ 
+ import java.util.ArrayList;
+ import java.util.HashSet;
++import java.util.IdentityHashMap;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Objects;
+@@ -146,12 +147,24 @@
+     @GuardedBy("this")
+     private final SparseIntArray mUidToNetworkPerm = new SparseIntArray();
+ 
+-    // NonNull keys are active non-bypassable and fully-routed VPN's interface name, Values are uid
+-    // ranges for apps under the VPNs which enable interface filtering.
+-    // If key is null, Values are uid ranges for apps under the VPNs which are connected but do not
+-    // enable interface filtering.
++    // A source belongs to one registered NetworkAgentInfo, not to its reusable netId or iface.
++    // Its generation never changes on LP, UID range, permission or bypass updates.
+     @GuardedBy("this")
+-    private final Map<String, Set<UidRange>> mVpnInterfaceUidRanges = new ArrayMap<>();
++    private final Map<Object, VpnNetwork> mVpnNetworks = new IdentityHashMap<>();
++    @GuardedBy("this")
++    private long mNextVpnGeneration;
++
++    private static final class VpnNetwork {
++        final long generation;
++        @Nullable final String iface;
++        final Set<UidRange> uidRanges;
++
++        VpnNetwork(long generation, @Nullable String iface, Set<UidRange> uidRanges) {
++            this.generation = generation;
++            this.iface = iface;
++            this.uidRanges = uidRanges;
++        }
++    }
+ 
+     // Items are uid ranges for apps under the VPN Lockdown
+     // Ranges were given through ConnectivityManager#setRequireVpnForUids, and ranges are allowed to
+@@ -984,8 +997,7 @@
+         // after their network permissions, including the derived SDK sandbox permissions.
+         for (int appId : mAllApps) {
+             final int uid = user.getUid(appId);
+-            updateVpnUid(uid, true /* add */);
+-            updateLockdownUid(uid, true /* add */);
++            updateVpnAndLockdownUid(uid, true /* present */);
+         }
+ 
+         if (mBpfNetMaps.isUidMigrationEnabled()) {
+@@ -1037,8 +1049,7 @@
+         // have VPN rules. Clear them and their sandboxes before removing permission state.
+         for (int appId : mAllApps) {
+             final int uid = user.getUid(appId);
+-            updateVpnUid(uid, false /* add */);
+-            updateLockdownUid(uid, false /* add */);
++            updateVpnAndLockdownUid(uid, false /* present */);
+         }
+ 
+         // Remove uids network permissions that belongs to the user.
+@@ -1164,31 +1175,31 @@
+         return permission;
+     }
+ 
+-    private synchronized void updateVpnUid(int uid, boolean add) {
+-        for (Map.Entry<String, Set<UidRange>> vpn : mVpnInterfaceUidRanges.entrySet()) {
+-            final Set<Integer> changedUids = new ArraySet<>();
+-            for (int candidate : getUidsIncludingSdkSandbox(uid)) {
+-                // Check the actual UID: a range can cover only the host or only its sandbox.
+-                if (!hasRestrictedNetworksPermission(candidate)
+-                        && UidRange.containsUid(vpn.getValue(), candidate)) {
+-                    changedUids.add(candidate);
+-                }
+-            }
+-            // A wildcard interface must not override lockdown for a newly installed UID.
+-            if (add) removeVpnLockdownUids(vpn.getKey(), changedUids);
+-            updateVpnUidsInterfaceRules(vpn.getKey(), changedUids, add);
+-        }
+-    }
+-
+-    private synchronized void updateLockdownUid(int uid, boolean add) {
+-        for (int candidate : getUidsIncludingSdkSandbox(uid)) {
+-            // Apps that can use restricted networks can always bypass VPNs. The existing
+-            // network permission producer already mirrors this permission to the sandbox.
+-            if (!hasRestrictedNetworksPermission(candidate)
+-                    && UidRange.containsUid(mVpnLockdownUidRanges.getSet(), candidate)) {
+-                updateLockdownUidRule(candidate, add);
+-            }
+-        }
++    @GuardedBy("this")
++    private void updateVpnAndLockdownUid(int uid, boolean present) {
++        final Set<Integer> uids = new ArraySet<>();
++        for (int candidate : getUidsIncludingSdkSandbox(uid)) uids.add(candidate);
++        updateVpnUidRules(uids, present);
++    }
++
++    @GuardedBy("this")
++    private VpnUidRule getVpnUidRule(int uid, boolean present) {
++        if (!present || !mUsers.contains(UserHandle.getUserHandleForUid(uid))
++                || hasRestrictedNetworksPermission(uid)) return VpnUidRule.EMPTY;
++
++        final boolean lockdown = UidRange.containsUid(mVpnLockdownUidRanges.getSet(), uid);
++        VpnNetwork selected = null;
++        for (VpnNetwork network : mVpnNetworks.values()) {
++            // Check the actual UID; a range can cover only the host or only its sandbox.
++            if (UidRange.containsUid(network.uidRanges, uid)
++                    && (selected == null || network.generation > selected.generation)) {
++                selected = network;
++            }
++        }
++        // Choose the owner before applying lockdown. A newer wildcard source must not let an
++        // older isolated source take over merely because the newer wildcard is blocked.
++        final boolean hasInterface = selected != null && (!lockdown || selected.iface != null);
++        return new VpnUidRule(lockdown, hasInterface, hasInterface ? selected.iface : null);
+     }
+ 
+     /**
+@@ -1314,8 +1325,7 @@
+                 packageName);
+         if (permission != currentPermission) {
+             if (permission == PERMISSION_SYSTEM) {
+-                updateVpnUid(uid, false /* add */);
+-                updateLockdownUid(uid, false /* add */);
++                updateVpnAndLockdownUid(uid, false /* present */);
+             }
+             mUidToNetworkPerm.put(uid, permission);
+ 
+@@ -1342,10 +1352,9 @@
+ 
+         // If the newly-installed package falls within some VPN's uid range, update Netd with it.
+         // This needs to happen after the mUidToNetworkPerm update above, since
+-        // hasRestrictedNetworksPermission() in updateVpnUid() and updateLockdownUid() depends on
++        // hasRestrictedNetworksPermission() in updateVpnAndLockdownUid() depends on
+         // mUidToNetworkPerm to check if the package can bypass VPN.
+-        updateVpnUid(uid, true /* add */);
+-        updateLockdownUid(uid, true /* add */);
++        updateVpnAndLockdownUid(uid, true /* present */);
+         mAllApps.add(appId);
+ 
+         // Log package added.
+@@ -1408,15 +1417,14 @@
+ 
+         // If the newly-removed package falls within some VPN's uid range, update Netd with it.
+         // This needs to happen before the mUidToNetworkPerm update below, since
+-        // hasRestrictedNetworksPermission() in updateVpnUid() and updateLockdownUid() depends on
++        // hasRestrictedNetworksPermission() in updateVpnAndLockdownUid() depends on
+         // mUidToNetworkPerm to check if the package can bypass VPN.
+         final boolean uidStillInstalled =
+                 !CollectionUtils.isEmpty(mPackageManager.getPackagesForUid(uid));
+         final int currentPermission = mUidToNetworkPerm.get(uid, PERMISSION_NONE);
+         final int permission = highestUidNetworkPermission(uid);
+         if (!uidStillInstalled || permission == PERMISSION_SYSTEM) {
+-            updateVpnUid(uid, false /* add */);
+-            updateLockdownUid(uid, false /* add */);
++            updateVpnAndLockdownUid(uid, false /* present */);
+         }
+         // If the package has been removed from all users on the device, clear it form mAllApps.
+         if (!uidStillInstalled && mPackageManager.getNameForUid(uid) == null) {
+@@ -1455,8 +1463,7 @@
+         // Removing one package of a shared UID must not remove the remaining packages'
+         // protection. It can also revoke their last restricted-network permission.
+         if (uidStillInstalled) {
+-            updateVpnUid(uid, true /* add */);
+-            updateLockdownUid(uid, true /* add */);
++            updateVpnAndLockdownUid(uid, true /* present */);
+         }
+     }
+ 
+@@ -1500,18 +1507,8 @@
+ 
+     private static Set<UidRange> getFilteredUidRanges(Set<UidRange> ranges, int vpnAppUid,
+             Set<Integer> delegateBypassUids) {
+-        // UIDs with the restricted network permission are not included here because they are not
+-        // filtered from the stored VPN interface ranges. Filtering them from the stored ranges
+-        // is unnecessary because:
+-        // - When a VPN connects, removeBypassingUids removes those UIDs from the list of UIDs to
+-        //   which it applies IIF_MATCH rules.
+-        // - If an app that can use restricted networks is installed and gets a UID in the range
+-        //   of a currently-connected VPN, updateVpnUid will ignore it.
+-        //
+-        // If this code did include these UIDs, the code would need to ensure that
+-        // onVpnUidRangesRemoved correctly removed the IIF_MATCH rule and the entry in
+-        // mVpnInterfaceUidRanges for a UID that did not have the permission when the VPN
+-        // connected and acquired the permission after the VPN connected.
++        // Keep dynamic restricted-network permissions out of the stored source. Package and
++        // permission updates must be able to recompute from the same original UID ranges.
+         final Set<Integer> bypassingUids = getVpnBypassingUids(vpnAppUid, delegateBypassUids);
+ 
+         final Set<UidRange> uidRanges = new ArraySet<>();
+@@ -1521,60 +1518,33 @@
+         return uidRanges;
+     }
+ 
+-    /**
+-     * Called when a new set of UID ranges are added to an active VPN network
+-     *
+-     * @param iface The active VPN network's interface name. Null iface indicates that the app is
+-     *              allowed to receive packets on all interfaces.
+-     * @param rangesToAdd The new UID ranges to be added to the network
+-     * @param vpnAppUid The uid of the VPN app
+-     */
+-    public synchronized void onVpnUidRangesAdded(@Nullable String iface, Set<UidRange> rangesToAdd,
+-            int vpnAppUid, Set<Integer> delegatedBypassUids) {
+-        // Calculate the list of new app uids under the VPN due to the new UID ranges and update
+-        // Netd about them. Because mAllApps only contains appIds instead of uids, the result might
+-        // be an overestimation if an app is not installed on the user on which the VPN is running,
+-        // but that's safe: if an app is not installed, it cannot receive any packets, so dropping
+-        // packets to that UID is fine.
+-        final Set<Integer> changedUids = intersectUids(rangesToAdd, mAllApps);
+-        final Set<UidRange> filteredRangesToAdd = getFilteredUidRanges(
+-                rangesToAdd, vpnAppUid, delegatedBypassUids);
+-        removeBypassingUids(changedUids, vpnAppUid, delegatedBypassUids);
+-        removeVpnLockdownUids(iface, changedUids);
+-        updateVpnUidsInterfaceRules(iface, changedUids, true /* add */);
+-        if (mVpnInterfaceUidRanges.containsKey(iface)) {
+-            mVpnInterfaceUidRanges.get(iface).addAll(filteredRangesToAdd);
+-        } else {
+-            mVpnInterfaceUidRanges.put(iface, new HashSet<UidRange>(filteredRangesToAdd));
+-        }
+-    }
+-
+-    /**
+-     * Called when a set of UID ranges are removed from an active VPN network
+-     *
+-     * @param iface The VPN network's interface name. Null iface indicates that the app is allowed
+-     *              to receive packets on all interfaces.
+-     * @param rangesToRemove Existing UID ranges to be removed from the VPN network
+-     * @param vpnAppUid The uid of the VPN app
+-     */
+-    public synchronized void onVpnUidRangesRemoved(@Nullable String iface,
+-            Set<UidRange> rangesToRemove, int vpnAppUid, Set<Integer> delegatedBypassUids) {
+-        // Calculate the list of app uids that are no longer under the VPN due to the removed UID
+-        // ranges and update Netd about them.
+-        final Set<Integer> changedUids = intersectUids(rangesToRemove, mAllApps);
+-        final Set<UidRange> filteredRangesToRemove = getFilteredUidRanges(
+-                rangesToRemove, vpnAppUid, delegatedBypassUids);
+-        removeBypassingUids(changedUids, vpnAppUid, delegatedBypassUids);
+-        updateVpnUidsInterfaceRules(iface, changedUids, false /* add */);
+-        Set<UidRange> existingRanges = mVpnInterfaceUidRanges.getOrDefault(iface, null);
+-        if (existingRanges == null) {
+-            loge("Attempt to remove unknown vpn uid Range iface = " + iface);
+-            return;
+-        }
+-        existingRanges.removeAll(filteredRangesToRemove);
+-        if (existingRanges.size() == 0) {
+-            mVpnInterfaceUidRanges.remove(iface);
+-        }
++    /** Register a network identity only after ConnectivityService has completed registration. */
++    public synchronized void registerVpnNetwork(@NonNull Object owner) {
++        Objects.requireNonNull(owner);
++        if (mVpnNetworks.containsKey(owner)) return;
++        mVpnNetworks.put(owner, new VpnNetwork(++mNextVpnGeneration, null, Set.of()));
++    }
++
++    /** Replace one network's complete filtering source without changing handover priority. */
++    public synchronized void setVpnNetwork(@NonNull Object owner, @Nullable String iface,
++            @NonNull Set<UidRange> uidRanges, int vpnAppUid,
++            @NonNull Set<Integer> delegatedBypassUids) {
++        final VpnNetwork old = mVpnNetworks.get(owner);
++        // A delayed update cannot revive an unregistered or retired network.
++        if (old == null) return;
++        final Set<UidRange> ranges = getFilteredUidRanges(uidRanges, vpnAppUid,
++                delegatedBypassUids);
++        mVpnNetworks.put(owner, new VpnNetwork(old.generation, iface, ranges));
++        final Set<UidRange> affected = new ArraySet<>(old.uidRanges);
++        affected.addAll(ranges);
++        updateVpnUidRules(intersectUids(affected, mAllApps), true /* present */);
++    }
++
++    /** Retire exactly one network; other sources, including a same-name interface, remain live. */
++    public synchronized void unregisterVpnNetwork(@NonNull Object owner) {
++        final VpnNetwork old = mVpnNetworks.remove(owner);
++        if (old == null) return;
++        updateVpnUidRules(intersectUids(old.uidRanges, mAllApps), true /* present */);
+     }
+ 
+     /**
+@@ -1612,19 +1582,9 @@
+         // not installed, it cannot receive any packets, so dropping packets to that UID is fine.
+         final Set<Integer> affectedUids = intersectUids(affectedUidRanges, mAllApps);
+ 
+-        // We skip adding rule to privileged apps and allow them to bypass incoming packet
+-        // filtering. The behaviour is consistent with how lockdown works for outgoing packets, but
+-        // the implementation is different: while ConnectivityService#setRequireVpnForUids does not
+-        // exclude privileged apps from the prohibit routing rules used to implement outgoing packet
+-        // filtering, privileged apps can still bypass outgoing packet filtering because the
+-        // prohibit rules observe the protected from VPN bit.
+-        // If removing a UID, we ensure it is not present anywhere in the set first.
+-        for (final int uid: affectedUids) {
+-            if (!hasRestrictedNetworksPermission(uid)
+-                    && (add || !UidRange.containsUid(mVpnLockdownUidRanges.getSet(), uid))) {
+-                updateLockdownUidRule(uid, add);
+-            }
+-        }
++        // Recompute the whole tuple so a wildcard is suppressed or restored together with
++        // lockdown. Dynamic permissions and overlapping range owners are evaluated once.
++        updateVpnUidRules(affectedUids, true /* present */);
+     }
+ 
+     /**
+@@ -1651,21 +1611,6 @@
+         return result;
+     }
+ 
+-    /**
+-     * Remove all apps which can elect to bypass the VPN from the list of uids
+-     *
+-     * An app can elect to bypass the VPN if it holds SYSTEM permission, or if it's the active VPN
+-     * app itself.
+-     *
+-     * @param uids The list of uids to operate on
+-     * @param vpnAppUid The uid of the VPN app
+-     */
+-    private void removeBypassingUids(Set<Integer> uids, int vpnAppUid,
+-            Set<Integer> delegateBypassUids) {
+-        uids.removeAll(getVpnBypassingUids(vpnAppUid, delegateBypassUids));
+-        uids.removeIf(this::hasRestrictedNetworksPermission);
+-    }
+-
+     private static Set<Integer> getVpnBypassingUids(int vpnAppUid,
+             Set<Integer> delegateBypassUids) {
+         final Set<Integer> bypassingUids = new ArraySet<>();
+@@ -1677,71 +1622,74 @@
+         return bypassingUids;
+     }
+ 
+-    // A wildcard IIF match takes precedence over lockdown in the ingress filter. Retain
+-    // interface-specific allow rules, but do not install a wildcard for locked-down UIDs.
+-    private void removeVpnLockdownUids(@Nullable String iface, Set<Integer> uids) {
+-        if (iface == null) {
+-            uids.removeIf(uid -> UidRange.containsUid(mVpnLockdownUidRanges.getSet(), uid));
+-        }
+-    }
+-
+-    /**
+-     * Update netd about the list of uids that are under an active VPN connection which they cannot
+-     * bypass.
+-     *
+-     * This is to instruct netd to set up appropriate filtering rules for these uids, such that they
+-     * can only receive ingress packets from the VPN's tunnel interface (and loopback).
+-     * Null iface set up a wildcard rule that allow app to receive packets on all interfaces.
+-     *
+-     * @param iface the interface name of the active VPN connection
+-     * @param add {@code true} if the uids are to be added to the interface, {@code false} if they
+-     *        are to be removed from the interface.
+-     */
+-    private void updateVpnUidsInterfaceRules(String iface, Set<Integer> uids, boolean add) {
+-        if (uids.size() == 0) {
+-            return;
+-        }
+-        if (!SdkLevel.isAtLeastT()) {
+-            try {
+-                if (add) {
+-                    mBpfNetMaps.addUidInterfaceRules(iface, toIntArray(uids));
+-                } else {
+-                    mBpfNetMaps.removeUidInterfaceRules(toIntArray(uids));
+-                }
+-            } catch (RemoteException | ServiceSpecificException e) {
+-                loge("Exception when updating permissions: ", e);
+-            }
+-            return;
+-        }
++    @GuardedBy("this")
++    private void updateVpnUidRules(Set<Integer> uids, boolean present) {
++        final Map<String, Set<Integer>> legacyAdds = new ArrayMap<>();
++        final Set<Integer> legacyRemoves = new ArraySet<>();
++        final Map<Integer, VpnUidRule> legacyRules = new ArrayMap<>();
++        boolean legacyFailed = false;
++        boolean changed = false;
+         for (int uid : uids) {
+             final VpnUidRule old = mDesiredVpnUidRules.getOrDefault(uid, VpnUidRule.EMPTY);
+-            mDesiredVpnUidRules.put(uid,
+-                    new VpnUidRule(old.lockdown, add, add ? iface : null));
+-            mDirtyVpnRuleUids.add(uid);
+-        }
+-        scheduleVpnRulesUpdate();
+-    }
+-
+-    private void updateLockdownUidRule(int uid, boolean add) {
+-        if (!SdkLevel.isAtLeastT()) {
+-            try {
+-                mBpfNetMaps.updateUidLockdownRule(uid, add);
+-            } catch (ServiceSpecificException e) {
+-                loge("Failed to " + (add ? "add" : "remove") + " Lockdown rule: " + e);
+-            }
++            final VpnUidRule rule = getVpnUidRule(uid, present);
++            if (old.lockdown == rule.lockdown && old.hasInterface == rule.hasInterface
++                    && Objects.equals(old.iface, rule.iface)) continue;
++            changed = true;
++            if (SdkLevel.isAtLeastT()) {
++                mDesiredVpnUidRules.put(uid, rule);
++                mDirtyVpnRuleUids.add(uid);
++                continue;
++            }
++            // Preserve the pre-T APIs, including grouped interface updates.
++            legacyRules.put(uid, rule);
++            if (old.hasInterface != rule.hasInterface || !Objects.equals(old.iface, rule.iface)) {
++                if (rule.hasInterface) {
++                    legacyAdds.computeIfAbsent(rule.iface, key -> new ArraySet<>()).add(uid);
++                } else {
++                    legacyRemoves.add(uid);
++                }
++            }
++            if (old.lockdown != rule.lockdown) {
++                try {
++                    mBpfNetMaps.updateUidLockdownRule(uid, rule.lockdown);
++                } catch (ServiceSpecificException e) {
++                    loge("Failed to update Lockdown rule: ", e);
++                    legacyFailed = true;
++                }
++            }
++        }
++        if (SdkLevel.isAtLeastT()) {
++            if (changed) scheduleVpnRulesUpdate();
+             return;
+         }
+-        final VpnUidRule old = mDesiredVpnUidRules.getOrDefault(uid, VpnUidRule.EMPTY);
+-        mDesiredVpnUidRules.put(uid, new VpnUidRule(add, old.hasInterface, old.iface));
+-        mDirtyVpnRuleUids.add(uid);
+-        scheduleVpnRulesUpdate();
++        try {
++            if (!legacyRemoves.isEmpty()) {
++                mBpfNetMaps.removeUidInterfaceRules(toIntArray(legacyRemoves));
++            }
++            for (Map.Entry<String, Set<Integer>> entry : legacyAdds.entrySet()) {
++                mBpfNetMaps.addUidInterfaceRules(entry.getKey(), toIntArray(entry.getValue()));
++            }
++        } catch (RemoteException | ServiceSpecificException e) {
++            loge("Exception when updating permissions: ", e);
++            legacyFailed = true;
++        }
++        if (!legacyFailed) {
++            for (Map.Entry<Integer, VpnUidRule> entry : legacyRules.entrySet()) {
++                final VpnUidRule rule = entry.getValue();
++                if (!rule.lockdown && !rule.hasInterface) {
++                    mDesiredVpnUidRules.remove(entry.getKey());
++                } else {
++                    mDesiredVpnUidRules.put(entry.getKey(), rule);
++                }
++            }
++        }
+     }
+ 
+     @GuardedBy("this")
+     private void scheduleVpnRulesUpdate() {
+         // The thread is started after this object's constructor. All update entry points run
+-        // after that. Coalescing at the end of the handler turn also avoids publishing the
+-        // temporary remove/add tuples used while replacing a VPN's interface or UID ranges.
++        // after that. Coalescing at the end of the handler turn publishes the latest complete
++        // tuple if several source or permission updates arrived together.
+         final Handler handler = getHandler();
+         handler.removeCallbacks(mReconcileVpnRules);
+         handler.post(mReconcileVpnRules);
+@@ -1924,8 +1872,7 @@
+             // Only an exemption grant removes existing restrictions. Unchanged or revoked
+             // permissions must not briefly remove the UID's lockdown rules.
+             if (permission == PERMISSION_SYSTEM) {
+-                updateVpnUid(uid, false /* add */);
+-                updateLockdownUid(uid, false /* add */);
++                updateVpnAndLockdownUid(uid, false /* present */);
+             }
+ 
+             if (PERMISSION_NONE == permission) {
+@@ -1952,8 +1899,7 @@
+         sendUidsNetworkPermission(updatedUids, true /* add */);
+         sendUidsNetworkPermission(removedUids, false /* add */);
+         for (int uid : uidsToUpdate) {
+-            updateVpnUid(uid, true /* add */);
+-            updateLockdownUid(uid, true /* add */);
++            updateVpnAndLockdownUid(uid, true /* present */);
+         }
+         mPermissionUpdateLogs.log("Setting change: update=" + updatedUids
+                 + ", remove=" + removedUids);
+@@ -1986,10 +1932,12 @@
+     public void dump(IndentingPrintWriter pw) {
+         pw.println("Interface filtering rules:");
+         pw.increaseIndent();
+-        for (Map.Entry<String, Set<UidRange>> vpn : mVpnInterfaceUidRanges.entrySet()) {
+-            pw.println("Interface: " + vpn.getKey());
+-            pw.println("UIDs: " + vpn.getValue().toString());
+-            pw.println();
++        synchronized (this) {
++            for (VpnNetwork network : mVpnNetworks.values()) {
++                pw.println("Generation: " + network.generation + ", interface: " + network.iface);
++                pw.println("UIDs: " + network.uidRanges);
++                pw.println();
++            }
+         }
+         pw.decreaseIndent();
+ 

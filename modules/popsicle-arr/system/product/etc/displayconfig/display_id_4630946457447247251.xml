@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<displayConfiguration>
+    <densityMapping>
+        <density>
+            <height>2608</height>
+            <width>1200</width>
+            <density>480</density>
+        </density>
+    </densityMapping>
+    <screenBrightnessMap>
+        <point>
+            <value>0.000366256</value>
+            <nits>1.0</nits>
+        </point>
+        <point>
+            <value>0.002258576</value>
+            <nits>2.0</nits>
+        </point>
+        <point>
+            <value>0.006043218</value>
+            <nits>5.0</nits>
+        </point>
+        <point>
+            <value>0.010438286</value>
+            <nits>10.0</nits>
+        </point>
+        <point>
+            <value>0.017885484</value>
+            <nits>24.0</nits>
+        </point>
+        <point>
+            <value>0.03699182</value>
+            <nits>59.8</nits>
+        </point>
+        <point>
+            <value>0.499938957</value>
+            <nits>800.0</nits>
+        </point>
+        <point>
+            <value>0.824014162</value>
+            <nits>2000.0</nits>
+        </point>
+        <point>
+            <value>1.0</value>
+            <nits>3500.0</nits>
+        </point>
+    </screenBrightnessMap>
+    <highBrightnessMode enabled="true">
+        <transitionPoint>0.374862654</transitionPoint>
+        <minimumLux>4475</minimumLux>
+        <timing>
+            <timeWindowSecs>0</timeWindowSecs>
+            <timeMaxSecs>0</timeMaxSecs>
+            <timeMinSecs>0</timeMinSecs>
+        </timing>
+        <allowInLowPowerMode>true</allowInLowPowerMode>
+        <minimumHdrPercentOfScreen>0</minimumHdrPercentOfScreen>
+        <sdrHdrRatioMap>
+            <point>
+                <sdrNits>2.0</sdrNits>
+                <hdrRatio>8.0</hdrRatio>
+            </point>
+            <point>
+                <sdrNits>1800.0</sdrNits>
+                <hdrRatio>8.0</hdrRatio>
+            </point>
+        </sdrHdrRatioMap>
+    </highBrightnessMode>
+    <lightSensor>
+        <type>android.sensor.light</type>
+        <name>tcs3760 Ambient Light Sensor Non-wakeup</name>
+    </lightSensor>
+    <!-- Keep framework history horizons, which cover its 4 s / 8 s debounce. -->
+    <preferArrByDefault>true</preferArrByDefault>
+    <supportsVrr>true</supportsVrr>
+    <idleScreenRefreshRateTimeout>
+        <luxThresholds>
+            <point><lux>0</lux><timeout>1000</timeout></point>
+        </luxThresholds>
+    </idleScreenRefreshRateTimeout>
+</displayConfiguration>

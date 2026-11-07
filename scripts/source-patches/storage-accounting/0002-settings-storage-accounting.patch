@@ -1,0 +1,31 @@
+--- a/src/com/android/settings/deviceinfo/storage/StorageUsageProgressBarPreferenceController.java
++++ b/src/com/android/settings/deviceinfo/storage/StorageUsageProgressBarPreferenceController.java
+@@ -31,6 +31,8 @@
+ import com.android.settingslib.widget.UsageProgressBarPreference;
+ 
+ import java.io.File;
++import com.android.settingslib.deviceinfo.StorageAccounting;
++
+ import java.io.IOException;
+ 
+ /**
+@@ -91,7 +93,7 @@
+ 
+                 if (mStorageEntry.isPrivate()) {
+                     // StorageStatsManager can only query private storages.
+-                    mTotalBytes = mStorageStatsManager.getTotalBytes(mStorageEntry.getFsUuid());
++                    mTotalBytes = StorageAccounting.getTotalBytes(mStorageStatsManager, mStorageEntry.getFsUuid());
+                     mUsedBytes = mTotalBytes
+                             - mStorageStatsManager.getFreeBytes(mStorageEntry.getFsUuid());
+                 } else {
+--- a/src/com/android/settings/deviceinfo/storage/StorageCacheHelper.java
++++ b/src/com/android/settings/deviceinfo/storage/StorageCacheHelper.java
+@@ -24,7 +24,7 @@
+  */
+ public class StorageCacheHelper {
+ 
+-    private static final String SHARED_PREFERENCE_NAME = "StorageCache";
++    private static final String SHARED_PREFERENCE_NAME = "StorageCacheAccountingV1";
+     private static final String TOTAL_SIZE_KEY = "total_size_key";
+     private static final String TOTAL_USED_SIZE_KEY = "total_used_size_key";
+     private static final String IMAGES_SIZE_KEY = "images_size_key";

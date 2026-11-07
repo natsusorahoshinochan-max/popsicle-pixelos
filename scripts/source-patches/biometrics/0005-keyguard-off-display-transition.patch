@@ -1,0 +1,24 @@
+--- a/services/core/java/com/android/server/wm/KeyguardController.java
++++ b/services/core/java/com/android/server/wm/KeyguardController.java
+@@ -46,6 +46,7 @@
+ import static com.android.server.policy.WindowManagerPolicy.FINISH_LAYOUT_REDO_WALLPAPER;
+ import static com.android.server.wm.ActivityTaskManagerDebugConfig.TAG_ATM;
+ import static com.android.server.wm.ActivityTaskManagerDebugConfig.TAG_WITH_CLASS_NAME;
++import static com.android.server.wm.DisplayContent.DISPLAY_OFF_SLEEP_TOKEN_TAG;
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -300,6 +301,13 @@
+         for (int i = mRootWindowContainer.getChildCount() - 1; i >= 0; i--) {
+             final DisplayContent dc = mRootWindowContainer.getChildAt(i);
+             if (!dc.isRemoving() && !dc.isRemovedOrInvalid()) {
++                // An off secondary display cannot draw for this unlock transition. Keep its
++                // keyguard state until the normal setKeyguardShown callback completes the unlock.
++                // The default display must still participate while waking from screen-off.
++                if (dc.mDisplayId != DEFAULT_DISPLAY
++                        && dc.hasSleepToken(DISPLAY_OFF_SLEEP_TOKEN_TAG)) {
++                    continue;
++                }
+                 final var state = getDisplayState(dc.mDisplayId);
+                 if (state.mKeyguardShowing && !state.mKeyguardGoingAway) {
+                     state.mKeyguardGoingAway = true;

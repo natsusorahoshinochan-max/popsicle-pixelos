@@ -1,0 +1,79 @@
+diff --git a/server/RouteController.cpp b/server/RouteController.cpp
+index 775bbbb..e10c2dc 100644
+--- a/server/RouteController.cpp
++++ b/server/RouteController.cpp
+@@ -53,6 +53,7 @@ namespace android::net {
+ 
+ auto RouteController::iptablesRestoreCommandFunction = execIptablesRestoreCommand;
+ auto RouteController::ifNameToIndexFunction = if_nametoindex;
++auto RouteController::sendUidProhibitRuleFunction = sendNetlinkRequest;
+ // BEGIN CONSTANTS --------------------------------------------------------------------------------
+ 
+ const uint32_t ROUTE_TABLE_LOCAL_NETWORK  = 97;
+@@ -338,19 +339,44 @@ int padInterfaceName(const char* input, char* name, size_t* length, uint16_t* pa
+         { PADDING_BUFFER,    oifPadding },
+     };
+ 
++    // Only the dedicated VPN prohibit rule has presence semantics. Other rule callers
++    // retain their existing delta behavior and error handling.
++    const bool reconcileProhibit = priority == RULE_PRIORITY_PROHIBIT_NON_VPN &&
++                                   ruleType == FR_ACT_PROHIBIT;
+     uint16_t flags = (action == RTM_NEWRULE) ? NETLINK_RULE_CREATE_FLAGS : NETLINK_REQUEST_FLAGS;
++    if (reconcileProhibit && action == RTM_NEWRULE) flags |= NLM_F_EXCL;
++    int firstError = 0;
++    bool changed = false;
+     for (size_t i = 0; i < ARRAY_SIZE(AF_FAMILIES); ++i) {
+         rule.family = AF_FAMILIES[i];
+-        if (int ret = sendNetlinkRequest(action, flags, iov, ARRAY_SIZE(iov), nullptr)) {
++        const int ret = reconcileProhibit
++                                ? RouteController::sendUidProhibitRuleFunction(
++                                          action, flags, iov, ARRAY_SIZE(iov), nullptr)
++                                : sendNetlinkRequest(action, flags, iov, ARRAY_SIZE(iov), nullptr);
++        if (ret == 0) {
++            changed = true;
++        } else {
++            if (reconcileProhibit &&
++                    ((action == RTM_NEWRULE && ret == -EEXIST) ||
++                     (action == RTM_DELRULE && ret == -ENOENT))) {
++                // An exclusive add confirms presence. Absence of one family must not stop
++                // cleanup of the other family after a partial write or lost acknowledgement.
++                continue;
++            }
+             if (!(action == RTM_DELRULE && ret == -ENOENT && priority == RULE_PRIORITY_TETHERING)) {
+                 // Don't log when deleting a tethering rule that's not there. This matches the
+                 // behaviour of clearTetheringRules, which ignores ENOENT in this case.
+                 ALOGE("Error %s %s rule: %s", actionName(action), familyName(rule.family),
+                       strerror(-ret));
+             }
+-            return ret;
++            if (!reconcileProhibit) return ret;
++            if (firstError == 0) firstError = ret;
+         }
+     }
++    if (firstError != 0) return firstError;
++    // Preserve the public repeated-remove error, after attempting both families. A real
++    // failure takes precedence because absence has not been established in that case.
++    if (reconcileProhibit && action == RTM_DELRULE && !changed) return -ENOENT;
+ 
+     return 0;
+ }
+diff --git a/server/RouteController.h b/server/RouteController.h
+index d8393e7..ded9705 100644
+--- a/server/RouteController.h
++++ b/server/RouteController.h
+@@ -17,6 +17,7 @@
+ #pragma once
+ 
+ #include "InterfaceController.h"  // getParameter
++#include "NetlinkCommands.h"
+ #include "NetdConstants.h"        // IptablesTarget
+ #include "Network.h"              // UidRangeMap
+ #include "Permission.h"
+@@ -195,6 +196,7 @@ public:
+     static int (*iptablesRestoreCommandFunction)(IptablesTarget, const std::string&,
+                                                  const std::string&, std::string *);
+     static uint32_t (*ifNameToIndexFunction)(const char*);
++    static decltype(&sendNetlinkRequest) sendUidProhibitRuleFunction;
+ 
+   private:
+     friend class RouteControllerTest;

@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+android_app {
+    name: "PopsicleImsAudioBridge",
+    srcs: ["AudioBridge.java", "ImsAudioApplication.java", "BootReceiver.java"],
+    manifest: "AndroidManifest.xml",
+    system_ext_specific: true,
+    privileged: true,
+    certificate: "platform",
+    platform_apis: true,
+    required: ["popsicle-qti-audio-controller", "qti-telephony-utils"],
+}

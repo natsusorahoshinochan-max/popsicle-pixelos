@@ -1,0 +1,98 @@
+diff --git a/android/build_prop.go b/android/build_prop.go
+--- a/android/build_prop.go
++++ b/android/build_prop.go
+@@ -144,6 +144,10 @@
+ 		prebuilt = proptools.String(ctx.Config().ProductVariables().PrebuiltOdmBuildProp)
+ 	} else if partition == "odm_dlkm" {
+ 		prebuilt = proptools.String(ctx.Config().ProductVariables().PrebuiltOdmDlkmBuildProp)
++	} else if partition == "vendor_dlkm" {
++		prebuilt = proptools.String(ctx.Config().ProductVariables().PrebuiltVendorDlkmBuildProp)
++	} else if partition == "system_dlkm" {
++		prebuilt = proptools.String(ctx.Config().ProductVariables().PrebuiltSystemDlkmBuildProp)
+ 	}
+ 	if prebuilt != "" {
+ 		if len(p.properties.Block_list) != 0 || len(p.properties.Footer_files) != 0 {
+@@ -266,7 +270,9 @@
+ 	AddLoadHook(module, func(ctx LoadHookContext) {
+ 		managedOdm := module.DeviceSpecific() && proptools.String(ctx.Config().ProductVariables().PrebuiltOdmBuildProp) != ""
+ 		managedOdmDlkm := module.InstallInOdmDlkm() && proptools.String(ctx.Config().ProductVariables().PrebuiltOdmDlkmBuildProp) != ""
+-		if managedOdm || managedOdmDlkm {
++		managedVendorDlkm := module.InstallInVendorDlkm() && proptools.String(ctx.Config().ProductVariables().PrebuiltVendorDlkmBuildProp) != ""
++		managedSystemDlkm := module.InstallInSystemDlkm() && proptools.String(ctx.Config().ProductVariables().PrebuiltSystemDlkmBuildProp) != ""
++		if managedOdm || managedOdmDlkm || managedVendorDlkm || managedSystemDlkm {
+ 			// This module normally inherits the source tree's Apache default.
+ 			// Its explicit OEM input requires proprietary license attribution.
+ 			ctx.AppendProperties(&struct{ Licenses []string }{
+diff --git a/android/variable.go b/android/variable.go
+--- a/android/variable.go
++++ b/android/variable.go
+@@ -523,15 +523,17 @@
+ 
+ 	ArtTargetIncludeDebugBuild *bool `json:",omitempty"`
+ 
+-	SystemPropFiles          []string `json:",omitempty"`
+-	SystemExtPropFiles       []string `json:",omitempty"`
+-	ProductPropFiles         []string `json:",omitempty"`
+-	OdmPropFiles             []string `json:",omitempty"`
+-	VendorPropFiles          []string `json:",omitempty"`
+-	PrebuiltOdmBuildProp     *string  `json:",omitempty"`
+-	PrebuiltOdmDlkmBuildProp *string  `json:",omitempty"`
+-	PrebuiltVendorBuildProp  *string  `json:",omitempty"`
+-	VendorPropertyBlacklist  []string `json:",omitempty"`
++	SystemPropFiles             []string `json:",omitempty"`
++	SystemExtPropFiles          []string `json:",omitempty"`
++	ProductPropFiles            []string `json:",omitempty"`
++	OdmPropFiles                []string `json:",omitempty"`
++	VendorPropFiles             []string `json:",omitempty"`
++	PrebuiltOdmBuildProp        *string  `json:",omitempty"`
++	PrebuiltOdmDlkmBuildProp    *string  `json:",omitempty"`
++	PrebuiltVendorDlkmBuildProp *string  `json:",omitempty"`
++	PrebuiltSystemDlkmBuildProp *string  `json:",omitempty"`
++	PrebuiltVendorBuildProp     *string  `json:",omitempty"`
++	VendorPropertyBlacklist     []string `json:",omitempty"`
+ 
+ 	EnableUffdGc       *string `json:",omitempty"`
+ 	BoardKernelVersion *string `json:",omitempty"`
+diff --git a/scripts/managed_vendor_build_prop.py b/scripts/managed_vendor_build_prop.py
+--- a/scripts/managed_vendor_build_prop.py
++++ b/scripts/managed_vendor_build_prop.py
+@@ -1,5 +1,5 @@
+ # SPDX-License-Identifier: MIT
+-"""Publish an unchanged OEM vendor/ODM/nested odm_dlkm build.prop after checking inputs.
++"""Publish an unchanged OEM vendor/ODM/DLKM build.prop after checking inputs.
+ 
+ The OEM image identifies its own vendor implementation. Framework-generated
+ identity/default properties do not describe that prebuilt implementation. Product
+@@ -59,7 +59,7 @@
+ 
+ def validate(source: bytes, config: dict, prop_files: list[Path], system_prop: Path | None,
+              partition: str = "vendor") -> None:
+-    require(partition in {"vendor", "odm", "odm_dlkm"}, "unsupported managed property partition")
++    require(partition in {"vendor", "odm", "odm_dlkm", "vendor_dlkm", "system_dlkm"}, "unsupported managed property partition")
+     require(partition != "vendor" or system_prop is not None,
+             "managed OEM vendor properties require actual system_build_prop")
+     require(config.get("Debuggable") is True and not config.get("Eng"),
+@@ -81,11 +81,11 @@
+     requests = []
+     for path in prop_files:
+         requests.extend(properties(path.read_text(), str(path)))
+-    if partition == "odm_dlkm":
++    if partition.endswith("_dlkm"):
+         # The fixed generator has no product-variable or TARGET prop-file channel
+         # for this partition. Do not silently accept a caller inventing one.
+-        for name in ("PRODUCT_ODM_DLKM_PROPERTIES", "TARGET_ODM_DLKM_PROP"):
+-            require(not config.get(name), f"unsupported odm_dlkm request channel: {name}")
++        for name in (f"PRODUCT_{partition.upper()}_PROPERTIES", f"TARGET_{partition.upper()}_PROP"):
++            require(not config.get(name), f"unsupported {partition} request channel: {name}")
+         variables = []
+     elif partition == "odm":
+         variables = ["PRODUCT_ODM_PROPERTIES"]
+@@ -163,7 +163,7 @@
+     parser.add_argument("--product-config", type=Path, action="append", required=True)
+     parser.add_argument("--prop-file", type=Path, action="append", default=[])
+     parser.add_argument("--system-prop", type=Path)
+-    parser.add_argument("--partition", choices=("vendor", "odm", "odm_dlkm"), default="vendor")
++    parser.add_argument("--partition", choices=("vendor", "odm", "odm_dlkm", "vendor_dlkm", "system_dlkm"), default="vendor")
+     args = parser.parse_args()
+     try:
+         publish(args.source, args.out, args.product_config, args.prop_file, args.system_prop, args.partition)

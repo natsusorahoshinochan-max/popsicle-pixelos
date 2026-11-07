@@ -1,0 +1,3 @@
+# Fixed PixelOS ROM production patch order.
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0001-wm-fixed-rotation-idle.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0002-shell-display-mode-transactions.patch

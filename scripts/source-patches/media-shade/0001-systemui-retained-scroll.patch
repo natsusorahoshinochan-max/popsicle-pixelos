@@ -1,0 +1,52 @@
+--- a/packages/SystemUI/src/com/android/systemui/qs/composefragment/QSFragmentCompose.kt
++++ b/packages/SystemUI/src/com/android/systemui/qs/composefragment/QSFragmentCompose.kt
+@@ -794,7 +794,10 @@
+                 Element(Elements.QuickSettingsContent, modifier = Modifier.weight(1f)) {
+                     // scrollState never changes
+                     LaunchedEffect(Unit) {
+-                        snapshotFlow { viewModel.isQsFullyCollapsed }
++                        snapshotFlow {
++                            // Split shade keeps QS fully expanded even when the shade is closed.
++                            viewModel.isQsFullyCollapsed || !viewModel.isPanelExpanded
++                        }
+                             .collect { collapsed ->
+                                 if (collapsed) {
+                                     scrollState.scrollTo(0)
+--- a/packages/SystemUI/src/com/android/systemui/shade/QuickSettingsControllerImpl.java
++++ b/packages/SystemUI/src/com/android/systemui/shade/QuickSettingsControllerImpl.java
+@@ -1625,10 +1625,13 @@
+ 
+     private void onScroll(int scrollY) {
+         mShadeHeaderController.setQsScrollY(scrollY);
+-        if (scrollY > 0 && !mFullyExpanded) {
+-            // TODO (b/265193930): remove dependency on NPVC
+-            // If we are scrolling QS, we should be fully expanded.
+-            mPanelViewControllerLazy.get().expandToQs();
++        if (scrollY > 0 && !mFullyExpanded && isExpansionEnabled()) {
++            // Layout can redispatch a retained scroll position without a user gesture.
++            // It must not reopen a closed shade or reverse an ongoing collapse.
++            NotificationPanelViewController panel = mPanelViewControllerLazy.get();
++            if (!panel.isFullyCollapsed() && !panel.isCollapsing()) {
++                panel.expandToQs();
++            }
+         }
+     }
+ 
+--- a/packages/SystemUI/src/com/android/systemui/shade/NotificationPanelViewController.java
++++ b/packages/SystemUI/src/com/android/systemui/shade/NotificationPanelViewController.java
+@@ -1360,10 +1360,11 @@
+     }
+ 
+     public void expandToQs() {
+-        if (mQsController.isExpansionEnabled()) {
+-            mQsController.setExpandImmediate(true);
+-            setShowShelfOnly(true);
+-        }
++        if (!mQsController.isExpansionEnabled()) {
++            return;
++        }
++        mQsController.setExpandImmediate(true);
++        setShowShelfOnly(true);
+         if (mSplitShadeEnabled && isKeyguardShowing()) {
+             // It's a special case as this method is likely to not be initiated by finger movement
+             // but rather called from adb shell or accessibility service.

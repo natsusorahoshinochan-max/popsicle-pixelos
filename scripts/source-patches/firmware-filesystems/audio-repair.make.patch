@@ -1,0 +1,14 @@
+--- a/core/popsicle_firmware_filesystems.mk
++++ b/core/popsicle_firmware_filesystems.mk
+@@ -45,6 +45,11 @@
+ # label. Use the same checked derivation for raw images and target-files gates.
+ ifeq ($(BOARD_VENDOR_EROFS_REPAIR_AMBIENT_LABEL),true)
+ POPSICLE_VENDOR_SOURCE_ARGS += --repair-ambient-label
++endif
++
++ifeq ($(BOARD_VENDOR_EROFS_AUDIO_REPAIR),true)
++POPSICLE_VENDOR_SOURCE_ARGS += --audio-repair
++POPSICLE_VENDOR_INPUTS += external/erofs-utils/popsicle/audio_repair.py
+ endif
+ 
+ ifeq ($(BOARD_VENDOR_EROFS_MERGE_NOTICE),true)

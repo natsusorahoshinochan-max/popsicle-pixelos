@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+hardware/qcom-caf/bootctrl 25092672e644459db328b43fd1c7c57cbff65c91 recovery-readback/bsg-platform-headers.patch

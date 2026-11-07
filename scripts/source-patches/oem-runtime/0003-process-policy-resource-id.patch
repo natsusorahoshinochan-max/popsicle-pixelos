@@ -1,0 +1,9 @@
+diff --git a/core/res/popsicle-resource-ids.txt b/core/res/popsicle-resource-ids.txt
+--- a/core/res/popsicle-resource-ids.txt
++++ b/core/res/popsicle-resource-ids.txt
+@@ -1,4 +1,5 @@
+ android:bool/config_enableOemCameraActivityScene = 0x01110325
+ android:bool/config_oemRearSmartAssistantSupported = 0x01110326
+ android:string/config_oemRearDisplayUniqueId = 0x01040bdf
+ android:string/config_oemRearHomeComponent = 0x01040be0
++android:bool/config_enableOemProcessPolicy = 0x01110327

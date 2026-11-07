@@ -1,0 +1,15 @@
+--- a/services/core/java/com/android/server/display/LocalDisplayAdapter.java
++++ b/services/core/java/com/android/server/display/LocalDisplayAdapter.java
+@@ -912,7 +912,11 @@
+                 if (mStaticDisplayInfo.isInternal) {
+                     mInfo.type = Display.TYPE_INTERNAL;
+                     mInfo.touch = DisplayDeviceInfo.TOUCH_INTERNAL;
+-                    if (res.getBoolean(R.bool.config_allowPresentationOnInternalDisplay)) {
++                    // The configured rear panel hosts the OEM camera's Presentation while
++                    // remaining an internal display with its own home and power group.
++                    if (res.getBoolean(R.bool.config_allowPresentationOnInternalDisplay)
++                            || (!mIsFirstDisplay && getUniqueId().equals(
++                                    res.getString(R.string.config_oemRearDisplayUniqueId)))) {
+                         mInfo.flags |= DisplayDeviceInfo.FLAG_PRESENTATION;
+                     }
+                     mInfo.flags |= DisplayDeviceInfo.FLAG_ROTATES_WITH_CONTENT;

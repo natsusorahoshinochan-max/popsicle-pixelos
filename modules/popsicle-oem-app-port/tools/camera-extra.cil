@@ -1,0 +1,8 @@
+; This is checked against the complete formally compiled camera/priv_app_36 delta.
+; Keep the live SDK 36 baseline in clone-camera-policy.awk; never grant all priv apps.
+(typeattributeset hal_misys_vendor_client (popsicle_camera_app))
+(allow popsicle_camera_app oem_foreground_service (service_manager (find)))
+(allow popsicle_camera_app adsprpcd_file (dir (getattr search)))
+(allow popsicle_camera_app vendor_xdsp_device (chr_file (ioctl read open)))
+(allow popsicle_camera_app vendor_camera_sensor_prop (file (read getattr map open)))
+(allow popsicle_camera_app vendor_displayfeature_prop (file (read getattr map open)))

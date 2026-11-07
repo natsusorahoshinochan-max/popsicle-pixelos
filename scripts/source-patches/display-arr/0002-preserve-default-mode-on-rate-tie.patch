@@ -1,0 +1,33 @@
+--- a/services/core/java/com/android/server/display/mode/VoteSummary.java
++++ b/services/core/java/com/android/server/display/mode/VoteSummary.java
+@@ -194,7 +194,21 @@
+                         ? appRequestBaseModeRefreshRate
+                         : defaultMode.getRefreshRate();
+ 
++        // Several configurations can share a refresh rate (for example MRR and ARR).
++        // Preserve the actual default configuration when refresh-rate and HDR priorities tie.
++        Display.Mode preferredDefaultMode = null;
++        for (Display.Mode mode : availableModes) {
++            if (mode.getModeId() == defaultMode.getModeId()
++                    && equalsWithinFloatTolerance(preferredRefreshRate, mode.getRefreshRate())) {
++                preferredDefaultMode = mode;
++                break;
++            }
++        }
++
+         if (!mIsUserPreferredHdrModeAllowed) {
++            if (preferredDefaultMode != null) {
++                return preferredDefaultMode;
++            }
+             for (Display.Mode availableMode : availableModes) {
+                 if (equalsWithinFloatTolerance(
+                         preferredRefreshRate, availableMode.getRefreshRate())) {
+@@ -210,7 +224,7 @@
+             return !availableModes.isEmpty() ? availableModes.get(0) : null;
+         }
+ 
+-        Display.Mode bestMode = null;
++        Display.Mode bestMode = preferredDefaultMode;
+         for (Display.Mode mode : availableModes) {
+             if (isNewModeBetterForBaseMode(bestMode, mode, allowHdr, preferredRefreshRate)) {
+                 bestMode = mode;

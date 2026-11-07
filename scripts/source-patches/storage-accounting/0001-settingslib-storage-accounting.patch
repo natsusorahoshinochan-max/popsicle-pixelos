@@ -1,0 +1,115 @@
+--- a/packages/SettingsLib/src/com/android/settingslib/applications/StorageStatsSource.java
++++ b/packages/SettingsLib/src/com/android/settingslib/applications/StorageStatsSource.java
+@@ -24,6 +24,8 @@
+ import android.os.UserHandle;
+ 
+ import androidx.annotation.VisibleForTesting;
++
++import com.android.settingslib.deviceinfo.StorageAccounting;
+ 
+ import java.io.IOException;
+ import java.util.UUID;
+@@ -62,7 +64,7 @@
+     }
+ 
+     public long getTotalBytes(@NonNull UUID storageUuid) throws IOException {
+-        return mStorageStatsManager.getTotalBytes(storageUuid);
++        return StorageAccounting.getTotalBytes(mStorageStatsManager, storageUuid);
+     }
+ 
+     /**
+--- a/packages/SettingsLib/src/com/android/settingslib/deviceinfo/StorageManagerVolumeProvider.java
++++ b/packages/SettingsLib/src/com/android/settingslib/deviceinfo/StorageManagerVolumeProvider.java
+@@ -51,7 +51,7 @@
+ 
+     @Override
+     public long getTotalBytes(StorageStatsManager stats, VolumeInfo volume) throws IOException {
+-        return stats.getTotalBytes(volume.getFsUuid());
++        return StorageAccounting.getTotalBytes(stats, volume.getFsUuid());
+     }
+ 
+     @Override
+--- a/packages/SettingsLib/src/com/android/settingslib/deviceinfo/PrivateStorageInfo.java
++++ b/packages/SettingsLib/src/com/android/settingslib/deviceinfo/PrivateStorageInfo.java
+@@ -61,7 +61,7 @@
+         final Context context = AppGlobals.getInitialApplication();
+         final StorageStatsManager stats = context.getSystemService(StorageStatsManager.class);
+         try {
+-            return stats.getTotalBytes(info.getFsUuid());
++            return StorageAccounting.getTotalBytes(stats, info.getFsUuid());
+         } catch (IOException e) {
+             Log.w(TAG, e);
+             return 0;
+--- a/packages/SettingsLib/src/com/android/settingslib/deviceinfo/StorageMeasurement.java
++++ b/packages/SettingsLib/src/com/android/settingslib/deviceinfo/StorageMeasurement.java
+@@ -160,7 +160,7 @@
+         }
+ 
+         try {
+-            details.totalSize = mStats.getTotalBytes(mVolume.fsUuid);
++            details.totalSize = StorageAccounting.getTotalBytes(mStats, mVolume.fsUuid);
+             details.availSize = mStats.getFreeBytes(mVolume.fsUuid);
+         } catch (IOException e) {
+             // The storage volume became null while we were measuring it.
+--- /dev/null
++++ b/packages/SettingsLib/src/com/android/settingslib/deviceinfo/StorageAccounting.java
+@@ -0,0 +1,59 @@
++/*
++ * Copyright (C) 2026 The popsicle PixelOS contributors
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.settingslib.deviceinfo;
++
++import android.app.AppGlobals;
++import android.app.usage.StorageStatsManager;
++import android.os.Environment;
++import android.os.storage.StorageManager;
++
++import java.io.IOException;
++import java.util.Objects;
++import java.util.UUID;
++
++/** Keeps internal-storage totals usable for subtraction from filesystem sizes. */
++public final class StorageAccounting {
++    private StorageAccounting() {}
++
++    public static long getTotalBytes(StorageStatsManager stats, UUID volumeUuid)
++            throws IOException {
++        final long advertisedBytes = stats.getTotalBytes(volumeUuid);
++        return StorageManager.UUID_DEFAULT.equals(volumeUuid)
++                ? getInternalTotalBytes(advertisedBytes) : advertisedBytes;
++    }
++
++    public static long getTotalBytes(StorageStatsManager stats, String volumeUuid)
++            throws IOException {
++        final long advertisedBytes = stats.getTotalBytes(volumeUuid);
++        return Objects.equals(StorageManager.UUID_PRIVATE_INTERNAL, volumeUuid)
++                ? getInternalTotalBytes(advertisedBytes) : advertisedBytes;
++    }
++
++    private static long getInternalTotalBytes(long advertisedBytes) throws IOException {
++        final long dataBytes = Environment.getDataDirectory().getTotalSpace();
++        if (dataBytes <= 0) {
++            throw new IOException("Internal storage filesystem size is unavailable");
++        }
++        if (advertisedBytes >= dataBytes) {
++            return advertisedBytes;
++        }
++
++        // The retail-size API can round below /data. Use vold's actual capacity
++        // for every Settings consumer instead of subtracting unlike totals.
++        final long physicalBytes;
++        try {
++            final StorageManager storage = AppGlobals.getInitialApplication()
++                    .getSystemService(StorageManager.class);
++            physicalBytes = storage.getInternalStorageBlockDeviceSize();
++        } catch (RuntimeException e) {
++            throw new IOException("Cannot obtain internal storage device size", e);
++        }
++        if (physicalBytes < dataBytes) {
++            throw new IOException("Internal storage device is smaller than its filesystem");
++        }
++        return physicalBytes;
++    }
++}

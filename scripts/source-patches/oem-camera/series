@@ -1,0 +1,14 @@
+# Fixed PixelOS ROM production patch order.
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0001-algorithm-image-lock-abi.patch
+system/core a5313eaec0219b021aaa5e59cc10dd07cfa8504c 0002-cameraopt-cpuset-query.patch
+build/soong 321ecf4fc740482603b917c5de30a0e27e97595e 0003-trace-dex-import-references.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0004-cameraopt-process-access.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0005-cameraopt-thread-affinity.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0006-camera-activity-scene.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0007-scene-handler-failure-boundary.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0008-photo-image-name-request-key.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0009-professional-image-name-request-key.patch
+frameworks/av 06458fc8272e542a02812061f2f42f888b168e50 0010-hevc-length-prefixed-muxer.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0011-cameraopt-process-lock-foundation.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0012-cameraopt-process-policy-inputs.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0013-cameraopt-process-policy-service.patch

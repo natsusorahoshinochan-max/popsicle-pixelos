@@ -1,0 +1,30 @@
+diff --git a/services/core/java/com/android/server/am/CachedAppOptimizer.java b/services/core/java/com/android/server/am/CachedAppOptimizer.java
+index 8f0a95e..f361e01 100644
+--- a/services/core/java/com/android/server/am/CachedAppOptimizer.java
++++ b/services/core/java/com/android/server/am/CachedAppOptimizer.java
+@@ -2711,9 +2711,10 @@ public class CachedAppOptimizer {
+     }
+ 
+     /**
+-     * Default implementation for ProcessDependencies, public for visibility to OomAdjuster class.
++     * Default implementation for ProcessDependencies. Package visibility also lets the original
++     * CameraOpt ActivityManagerAdapter use it from the shared system_server classloader.
+      */
+-    private static final class DefaultProcessDependencies implements ProcessDependencies {
++    static final class DefaultProcessDependencies implements ProcessDependencies {
+         public static volatile int mPidCompacting = -1;
+ 
+         // Get memory RSS from process.
+diff --git a/services/core/java/com/android/server/am/ProcessRecord.java b/services/core/java/com/android/server/am/ProcessRecord.java
+index da58696..61ae390 100644
+--- a/services/core/java/com/android/server/am/ProcessRecord.java
++++ b/services/core/java/com/android/server/am/ProcessRecord.java
+@@ -88,7 +88,7 @@ import java.util.function.Consumer;
+  * Full information about a particular process that
+  * is currently running.
+  */
+-class ProcessRecord extends ProcessRecordInternal implements WindowProcessListener,
++public class ProcessRecord extends ProcessRecordInternal implements WindowProcessListener,
+         ProcessServiceRecordInternal.Observer {
+     static final String TAG = TAG_WITH_CLASS_NAME ? "ProcessRecord" : TAG_AM;
+ 

@@ -1,0 +1,10 @@
+--- a/JavaLibrary.bp
++++ b/JavaLibrary.bp
+@@ -259,6 +259,7 @@
+ // See core-all-system-modules for more details.
+ java_library {
+     name: "core-all",
++    visibility: ["//libcore:__subpackages__", "//frameworks/base/tools/popsicle-turbo"],
+     defaults: ["libcore_java_defaults"],
+ 
+     srcs: [

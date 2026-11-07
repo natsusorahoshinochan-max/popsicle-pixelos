@@ -1,0 +1,508 @@
+diff --git a/core/java/miui/process/ProcessManager.java b/core/java/miui/process/ProcessManager.java
+--- a/core/java/miui/process/ProcessManager.java
++++ b/core/java/miui/process/ProcessManager.java
+@@ -34,6 +34,12 @@
+     @UnsupportedAppUsage
+     public static final int LOCKED_MAX_PROCESS_STATE = PROCESS_CLEANER_ENABLED ? 10 : 13;
+ 
++    @UnsupportedAppUsage
++    public static final int SEC_PROTECT_MAX_ADJ = PROCESS_CLEANER_ENABLED ? 600 : 400;
++
++    @UnsupportedAppUsage
++    public static final int SEC_PROTECT_MAX_PROCESS_STATE = PROCESS_CLEANER_ENABLED ? 14 : 13;
++
+     private ProcessManager() {}
+ 
+     @UnsupportedAppUsage
+diff --git a/services/core/java/com/android/server/am/ActivityManagerService.java b/services/core/java/com/android/server/am/ActivityManagerService.java
+--- a/services/core/java/com/android/server/am/ActivityManagerService.java
++++ b/services/core/java/com/android/server/am/ActivityManagerService.java
+@@ -9709,6 +9709,8 @@
+             t.traceEnd();
+         }
+ 
++        OemProcessPolicyBridge.systemReady(this);
++
+         try {
+             sTheRealBuildSerial = IDeviceIdentifiersPolicyService.Stub.asInterface(
+                     ServiceManager.getService(Context.DEVICE_IDENTIFIERS_SERVICE))
+diff --git a/services/core/java/com/android/server/wm/OemForegroundInfoController.java b/services/core/java/com/android/server/wm/OemForegroundInfoController.java
+--- a/services/core/java/com/android/server/wm/OemForegroundInfoController.java
++++ b/services/core/java/com/android/server/wm/OemForegroundInfoController.java
+@@ -28,6 +28,8 @@
+ 
+ import com.android.internal.annotations.GuardedBy;
+ import com.android.internal.annotations.VisibleForTesting;
++import com.android.server.LocalServices;
++import com.android.server.am.OemProcessPolicyBridge;
+ 
+ import java.util.Objects;
+ 
+@@ -59,7 +61,11 @@
+             if (reply != null) reply.writeString(DESCRIPTOR);
+             return true;
+         }
+-        if (code != 10 && code != 11) return super.onTransact(code, data, reply, flags);
++        if (code != 10 && code != 11) {
++            OemProcessPolicyBridge policy = LocalServices.getService(OemProcessPolicyBridge.class);
++            if (policy != null && policy.onTransact(code, data, reply, flags)) return true;
++            return super.onTransact(code, data, reply, flags);
++        }
+         data.enforceInterface(DESCRIPTOR);
+         if (reply == null) {
+             throw new IllegalArgumentException("Listener registration requires a synchronous call");
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -8090,4 +8090,5 @@
+     <string name="config_oemRearHomeComponent" translatable="false"></string>
+     <bool name="config_oemRearSmartAssistantSupported">false</bool>
+     <bool name="config_enableOemCameraActivityScene">false</bool>
++    <bool name="config_enableOemProcessPolicy">false</bool>
+ </resources>
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -6633,4 +6633,5 @@
+     <java-symbol type="string" name="config_oemRearHomeComponent" />
+     <java-symbol type="bool" name="config_oemRearSmartAssistantSupported" />
+     <java-symbol type="bool" name="config_enableOemCameraActivityScene" />
++  <java-symbol type="bool" name="config_enableOemProcessPolicy" />
+ </resources>
+diff --git a/services/core/java/com/android/server/am/OemProcessLockTarget.java b/services/core/java/com/android/server/am/OemProcessLockTarget.java
+--- a/services/core/java/com/android/server/am/OemProcessLockTarget.java
++++ b/services/core/java/com/android/server/am/OemProcessLockTarget.java
+@@ -16,27 +16,70 @@
+ 
+ package com.android.server.am;
+ 
++import android.os.SystemProperties;
++import android.util.Slog;
++
+ import com.android.internal.annotations.GuardedBy;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.Objects;
+-import java.util.function.Predicate;
+ 
+ import miui.process.ProcessManager;
+ 
+ /** AMS operations behind the original process-lock transactions. */
+-final class OemProcessLockTarget implements OemProcessLockTransactions.Target {
++final class OemProcessLockTarget implements OemProcessLockTransactions.Target,
++        OemProcessCloudTransactions.Target, OemProcessOnePushTransactions.Target {
++    private static final boolean PROMOTION_ENABLED =
++            SystemProperties.getBoolean("persist.am.enable_ppm", true);
++    private static final boolean MEMORY_OPT_ENABLED =
++            SystemProperties.getBoolean("persist.miui.mopt.acore.enable", false);
+     private final ActivityManagerService mService;
+     private final OemLockedApplicationStore mStore;
+-    // The live policy must supply secretly-protected && !one-push-blocked, not a default value.
+-    private final Predicate<String> mSkipLockedPromotion;
++    private final OemProcessProtectionState mPolicy;
+ 
+     OemProcessLockTarget(ActivityManagerService service, OemLockedApplicationStore store,
+-            Predicate<String> skipLockedPromotion) {
++            OemProcessProtectionState policy) {
+         mService = Objects.requireNonNull(service);
+         mStore = Objects.requireNonNull(store);
+-        mSkipLockedPromotion = Objects.requireNonNull(skipLockedPromotion);
++        mPolicy = Objects.requireNonNull(policy);
++    }
++
++    @Override
++    public void updateCloudData(OemProcessCloudTransactions.CloudData data) {
++        OemProcessLockPermission.enforce(mService);
++        if (data == null) throw new IllegalArgumentException("cloudData cannot be null!");
++        // Original ProcessPolicy consumes these four fields, in this order.
++        mPolicy.updateCloudData(data.whiteList, data.appProtectMap, data.fastBootList,
++                data.secretlyProtected);
++    }
++
++    @Override
++    public boolean onePushUpdateWhitelist(String packageName, boolean remove) {
++        if (!mPolicy.isOnePushEnabled() || packageName == null) return false;
++        if (!OemProcessLockPermission.check(mService)
++                && !OemProcessLockPermission.checkSystemSignature(mService)) {
++            Slog.w("ProcessManager", "onePushUpdateWhitelist permission denied");
++            return false;
++        }
++        try {
++            List<String> affected = mPolicy.setOnePushBlocked(packageName, remove);
++            for (String processName : affected) {
++                synchronized (mService) {
++                    ProcessRecord app = findProcessLocked(processName, null);
++                    if (app == null) continue;
++                    if (remove) {
++                        promoteLockedApp(app);
++                    } else {
++                        promoteImportantProcAdj(app);
++                    }
++                }
++            }
++            return true;
++        } catch (Exception e) {
++            Slog.e("ProcessManager", "onePushUpdateWhitelist failed", e);
++            return false;
++        }
+     }
+ 
+     @Override
+@@ -61,11 +104,11 @@
+     }
+ 
+     @GuardedBy("mService")
+-    private ProcessRecord findProcessLocked(String processName, int userId) {
++    private ProcessRecord findProcessLocked(String processName, Integer userId) {
+         ArrayList<ProcessRecord> processes = mService.mProcessList.getLruProcessesLOSP();
+         for (int i = processes.size() - 1; i >= 0; i--) {
+             ProcessRecord app = processes.get(i);
+-            if (app.getThread() != null && app.userId == userId
++            if (app.getThread() != null && (userId == null || app.userId == userId)
+                     && app.processName.equals(processName)) {
+                 return app;
+             }
+@@ -74,8 +117,39 @@
+     }
+ 
+     @GuardedBy("mService")
++    private void promoteImportantProcAdj(ProcessRecord app) {
++        if (app.getMaxAdj() <= 0) return;
++        String processName = app.processName;
++        String packageName = app.getApplicationInfo().packageName;
++        if (processName != null && packageName != null
++                && mPolicy.isInStaticWhiteList(processName, packageName)
++                && !(MEMORY_OPT_ENABLED && "android.process.acore".equals(processName))
++                && app.getMaxAdj() > 800) {
++            mService.mProcessStateController.setMaxAdj(app, 800);
++        }
++        if (!PROMOTION_ENABLED) return;
++        int adj;
++        int state;
++        if (mPolicy.shouldSkipLockedPromotion(processName)) {
++            adj = ProcessManager.SEC_PROTECT_MAX_ADJ;
++            state = ProcessManager.SEC_PROTECT_MAX_PROCESS_STATE;
++        } else if (mStore.isLocked(processName, app.userId)) {
++            adj = ProcessManager.LOCKED_MAX_ADJ;
++            state = ProcessManager.LOCKED_MAX_PROCESS_STATE;
++        } else {
++            return;
++        }
++        if (app.getMaxAdj() > adj) {
++            mService.mProcessStateController.setMaxAdj(app, adj);
++        }
++        if (IProcessPolicy.getAppMaxProcState(app) > state) {
++            IProcessPolicy.setAppMaxProcState(app, state);
++        }
++    }
++
++    @GuardedBy("mService")
+     void promoteLockedApp(ProcessRecord app) {
+-        if (app.isPersistent() || mSkipLockedPromotion.test(app.processName)) return;
++        if (app.isPersistent() || mPolicy.shouldSkipLockedPromotion(app.processName)) return;
+         boolean locked = mStore.isLocked(app.processName, app.userId);
+         int adj = locked ? ProcessManager.LOCKED_MAX_ADJ : 1001;
+         int state = locked ? ProcessManager.LOCKED_MAX_PROCESS_STATE : 20;
+diff --git a/services/core/java/com/android/server/am/OemProcessLockPermission.java b/services/core/java/com/android/server/am/OemProcessLockPermission.java
+--- a/services/core/java/com/android/server/am/OemProcessLockPermission.java
++++ b/services/core/java/com/android/server/am/OemProcessLockPermission.java
+@@ -17,16 +17,23 @@
+ package com.android.server.am;
+ 
+ import android.content.pm.ApplicationInfo;
++import android.content.pm.PackageManager;
+ import android.os.Binder;
+ import android.os.Process;
+ 
+ /** The original ProcessManager mutation permission, using the real AMS PID map. */
+ final class OemProcessLockPermission {
+     static void enforce(ActivityManagerService service) {
++        if (check(service)) return;
++        throw new SecurityException("ProcessManager mutation denied: pid="
++                + Binder.getCallingPid() + ", uid=" + Binder.getCallingUid());
++    }
++
++    static boolean check(ActivityManagerService service) {
+         int uid = Binder.getCallingUid();
+         int pid = Binder.getCallingPid();
+         if (uid != Process.SHELL_UID) {
+-            if (uid < Process.FIRST_APPLICATION_UID) return;
++            if (uid < Process.FIRST_APPLICATION_UID) return true;
+             synchronized (service.mPidsSelfLocked) {
+                 ProcessRecord app = service.mPidsSelfLocked.get(pid);
+                 if (app != null) {
+@@ -34,13 +41,25 @@
+                     if (info != null && ((info.flags & (ApplicationInfo.FLAG_SYSTEM
+                             | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
+                             || app.uid == Process.SYSTEM_UID)) {
+-                        return;
++                        return true;
+                     }
+                 }
+             }
+         }
+-        throw new SecurityException("ProcessManager.updateApplicationLockedState denied: pid="
+-                + pid + ", uid=" + uid);
++        return false;
++    }
++
++    static boolean checkSystemSignature(ActivityManagerService service) {
++        String packageName;
++        synchronized (service.mPidsSelfLocked) {
++            ProcessRecord app = service.mPidsSelfLocked.get(Binder.getCallingPid());
++            if (app == null || app.uid != Binder.getCallingUid()
++                    || app.getApplicationInfo() == null) return false;
++            packageName = app.getApplicationInfo().packageName;
++        }
++        // Original SmartPower AppState obtains this result from the live package identity.
++        return service.mContext.getPackageManager().checkSignatures("android", packageName)
++                == PackageManager.SIGNATURE_MATCH;
+     }
+ 
+     private OemProcessLockPermission() {}
+diff --git a/services/core/java/com/android/server/am/OemProcessProtectionState.java b/services/core/java/com/android/server/am/OemProcessProtectionState.java
+--- a/services/core/java/com/android/server/am/OemProcessProtectionState.java
++++ b/services/core/java/com/android/server/am/OemProcessProtectionState.java
+@@ -106,6 +106,10 @@
+         return mSecretlyProtected.contains(processName);
+     }
+ 
++    boolean isOnePushEnabled() {
++        return mOnePushEnabled;
++    }
++
+     synchronized boolean isOnePushBlocked(String processName) {
+         if (!mOnePushEnabled || processName == null) return false;
+         for (String packageName : mOnePushBlocked) {
+diff --git a/services/core/java/com/android/server/am/OemProcessCloudTransactions.java b/services/core/java/com/android/server/am/OemProcessCloudTransactions.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/am/OemProcessCloudTransactions.java
+@@ -0,0 +1,98 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.am;
++
++import android.os.BadParcelableException;
++import android.os.IBinder;
++import android.os.Parcel;
++import android.os.RemoteException;
++
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Objects;
++
++/** Original cloud transaction delegated by the existing ProcessManager Binder owner. */
++public final class OemProcessCloudTransactions {
++    private static final String DESCRIPTOR = "miui.IProcessManager";
++
++    /** Complete original wire input, including fields not consumed by ProcessPolicy. */
++    public static final class CloudData {
++        public final List<String> whiteList;
++        public final Map<String, Integer> appProtectMap;
++        public final Map<String, Integer> fgProtectMap;
++        public final List<String> fastBootList;
++        public final Map<String, Integer> cameraMemThresholdMap;
++        public final List<String> secretlyProtected;
++
++        private CloudData(Parcel data) {
++            whiteList = readList(data);
++            appProtectMap = readMap(data);
++            fgProtectMap = readMap(data);
++            fastBootList = readList(data);
++            cameraMemThresholdMap = readMap(data);
++            secretlyProtected = readList(data);
++        }
++    }
++
++    public interface Target {
++        void updateCloudData(CloudData data) throws RemoteException;
++    }
++
++    private final Target mTarget;
++
++    public OemProcessCloudTransactions(Target target) {
++        mTarget = Objects.requireNonNull(target);
++    }
++
++    public boolean onTransact(int code, Parcel data, Parcel reply, int flags)
++            throws RemoteException {
++        if (code != 8) return false;
++        if (reply == null || (flags & IBinder.FLAG_ONEWAY) != 0) {
++            throw new IllegalArgumentException("Cloud updates require a synchronous transaction");
++        }
++        data.enforceInterface(DESCRIPTOR);
++        // Original Native calls CREATOR directly: there is no outer nullable-object marker.
++        CloudData cloud = new CloudData(data);
++        data.enforceNoDataAvail();
++        mTarget.updateCloudData(cloud);
++        reply.writeNoException();
++        return true;
++    }
++
++    private static List<String> readList(Parcel data) {
++        // Original ProcessCloudData writes a presence int followed by writeList, not strings.
++        return data.readInt() == 0 ? null
++                : data.readArrayList(List.class.getClassLoader(), String.class);
++    }
++
++    private static Map<String, Integer> readMap(Parcel data) {
++        int size = data.readInt();
++        // Even a null string key and its integer value require at least eight bytes.
++        if (size > data.dataAvail() / 8) {
++            throw new BadParcelableException("Truncated process cloud map");
++        }
++        Map<String, Integer> result = null;
++        for (int i = 0; i < size; i++) {
++            String key = data.readString();
++            int value = data.readInt();
++            if (result == null) result = new HashMap<>();
++            result.put(key, value);
++        }
++        return result;
++    }
++}
+diff --git a/services/core/java/com/android/server/am/OemProcessOnePushTransactions.java b/services/core/java/com/android/server/am/OemProcessOnePushTransactions.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/am/OemProcessOnePushTransactions.java
+@@ -0,0 +1,52 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.am;
++
++import android.os.IBinder;
++import android.os.Parcel;
++import android.os.RemoteException;
++
++import java.util.Objects;
++
++/** Original one-push transaction; the target owns gating, permissions and process effects. */
++public final class OemProcessOnePushTransactions {
++    public interface Target {
++        boolean onePushUpdateWhitelist(String packageName, boolean remove) throws RemoteException;
++    }
++
++    private final Target mTarget;
++
++    public OemProcessOnePushTransactions(Target target) {
++        mTarget = Objects.requireNonNull(target);
++    }
++
++    public boolean onTransact(int code, Parcel data, Parcel reply, int flags)
++            throws RemoteException {
++        if (code != 36) return false;
++        if (reply == null || (flags & IBinder.FLAG_ONEWAY) != 0) {
++            throw new IllegalArgumentException("One-push updates require a synchronous transaction");
++        }
++        data.enforceInterface("miui.IProcessManager");
++        String packageName = data.readString();
++        boolean remove = data.readInt() != 0;
++        data.enforceNoDataAvail();
++        boolean success = mTarget.onePushUpdateWhitelist(packageName, remove);
++        reply.writeNoException();
++        reply.writeInt(success ? 1 : 0);
++        return true;
++    }
++}
+diff --git a/services/core/java/com/android/server/am/OemProcessPolicyBridge.java b/services/core/java/com/android/server/am/OemProcessPolicyBridge.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/am/OemProcessPolicyBridge.java
+@@ -0,0 +1,66 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.am;
++
++import android.os.Parcel;
++import android.os.RemoteException;
++import android.os.SystemProperties;
++
++import com.android.internal.os.BackgroundThread;
++import com.android.server.LocalServices;
++
++import org.json.JSONException;
++
++import java.io.IOException;
++
++/** AMS-owned process policy, delegated to by the already-published ProcessManager Binder. */
++public final class OemProcessPolicyBridge {
++    private final OemProcessLockTransactions mLocks;
++    private final OemProcessCloudTransactions mCloud;
++    private final OemProcessOnePushTransactions mOnePush;
++
++    private OemProcessPolicyBridge(ActivityManagerService service,
++            OemProcessProtectionState policy) {
++        OemLockedApplicationStore store = new OemLockedApplicationStore(
++                service.mContext.getContentResolver(), BackgroundThread.getHandler());
++        OemProcessLockTarget target = new OemProcessLockTarget(service, store, policy);
++        mLocks = new OemProcessLockTransactions(target);
++        mCloud = new OemProcessCloudTransactions(target);
++        mOnePush = new OemProcessOnePushTransactions(target);
++    }
++
++    static void systemReady(ActivityManagerService service) {
++        if (!service.mContext.getResources().getBoolean(
++                com.android.internal.R.bool.config_enableOemProcessPolicy)) return;
++        try {
++            OemProcessProtectionState policy = OemProcessPolicyConfig.load(
++                    OemProcessPolicyConfig.SYSTEM_CONFIG,
++                    SystemProperties.getBoolean("persist.sys.onepush_update_list", false));
++            LocalServices.addService(OemProcessPolicyBridge.class,
++                    new OemProcessPolicyBridge(service, policy));
++        } catch (IOException | JSONException e) {
++            throw new IllegalStateException("Cannot load required OEM process policy", e);
++        }
++    }
++
++    public boolean onTransact(int code, Parcel data, Parcel reply, int flags)
++            throws RemoteException {
++        return mLocks.onTransact(code, data, reply, flags)
++                || mCloud.onTransact(code, data, reply, flags)
++                || mOnePush.onTransact(code, data, reply, flags);
++    }
++}

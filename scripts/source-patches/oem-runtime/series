@@ -1,0 +1,4 @@
+# Fixed PixelOS ROM production patch order.
+build/soong 321ecf4fc740482603b917c5de30a0e27e97595e 0001-aapt-stable-resource-ids.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0002-preserve-framework-resource-ids.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0003-process-policy-resource-id.patch

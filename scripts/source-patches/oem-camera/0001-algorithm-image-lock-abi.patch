@@ -1,0 +1,47 @@
+diff --git a/core/jni/android_media_Utils.cpp b/core/jni/android_media_Utils.cpp
+--- a/core/jni/android_media_Utils.cpp
++++ b/core/jni/android_media_Utils.cpp
+@@ -702,13 +702,18 @@
+ 
+ status_t lockImageFromBuffer(sp<GraphicBuffer> buffer, uint32_t inUsage,
+         const Rect& rect, int fenceFd, LockedImage* outputImage) {
++    return lockImageFromBuffer(buffer, inUsage, rect, fenceFd, outputImage, false);
++}
++
++status_t lockImageFromBuffer(sp<GraphicBuffer> buffer, uint32_t inUsage,
++        const Rect& rect, int fenceFd, LockedImage* outputImage, bool allowOpaque) {
+     ALOGV("%s: Try to lock the GraphicBuffer", __FUNCTION__);
+ 
+     if (buffer == nullptr || outputImage == nullptr) {
+         ALOGE("Input BufferItem or output LockedImage is NULL!");
+         return BAD_VALUE;
+     }
+-    if (isFormatOpaque(buffer->getPixelFormat())) {
++    if (!allowOpaque && isFormatOpaque(buffer->getPixelFormat())) {
+         ALOGE("Opaque format buffer is not lockable!");
+         return BAD_VALUE;
+     }
+@@ -719,7 +724,7 @@
+     int format = buffer->getPixelFormat();
+     int flexFormat = format;
+ 
+-    if (isPossiblyYUV(format)) {
++    if (isPossiblyYUV(format) || (allowOpaque && isFormatOpaque(format))) {
+         res = buffer->lockAsyncYCbCr(inUsage, rect, &ycbcr, fenceFd);
+ 
+         if (res != OK) {
+diff --git a/core/jni/android_media_Utils.h b/core/jni/android_media_Utils.h
+--- a/core/jni/android_media_Utils.h
++++ b/core/jni/android_media_Utils.h
+@@ -43,6 +43,11 @@
+ status_t lockImageFromBuffer(sp<GraphicBuffer> buffer, uint32_t inUsage,
+         const Rect& rect, int fenceFd, LockedImage* outputImage);
+ 
++// OEM algorithm JNI ABI. The caller retains the same fence and unlock responsibilities.
++// allowOpaque permits a real YCbCr lock attempt for implementation-defined buffers.
++status_t lockImageFromBuffer(sp<GraphicBuffer> buffer, uint32_t inUsage,
++        const Rect& rect, int fenceFd, LockedImage* outputImage, bool allowOpaque);
++
+ status_t lockImageFromBuffer(BufferItem* bufferItem, uint32_t inUsage,
+         int fenceFd, LockedImage* outputImage);
+ 

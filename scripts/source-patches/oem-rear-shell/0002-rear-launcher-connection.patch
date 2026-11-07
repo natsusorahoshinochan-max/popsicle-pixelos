@@ -1,0 +1,590 @@
+diff --git a/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java b/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
+--- a/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
++++ b/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
+@@ -108,6 +108,7 @@
+ import com.android.systemui.navigationbar.views.NavigationBarView;
+ import com.android.systemui.navigationbar.views.buttons.KeyButtonView;
+ import com.android.systemui.process.ProcessWrapper;
++import com.android.systemui.recents.OemRearLauncherConnection;
+ import com.android.systemui.recents.ScreenPinningRequest;
+ import com.android.systemui.scene.domain.interactor.SceneInteractor;
+ import com.android.systemui.scene.shared.flag.SceneContainerFlag;
+@@ -171,6 +172,8 @@
+     private final HeadlessSystemUserMode mHeadlessSystemUserMode;
+     private SysUiState mDefaultDisplaySysUIState;
+     private final Handler mHandler;
++    private final OemRearLauncherConnection mRearLauncherConnection;
++    private boolean mShellInterfacesCreated;
+     private final Lazy<NavigationBarController> mNavBarControllerLazy;
+     private final ScreenPinningRequest mScreenPinningRequest;
+     private final NotificationShadeWindowController mStatusBarWinController;
+@@ -546,6 +549,7 @@
+         @Override
+         public void onReceive(Context context, Intent intent) {
+             if (Objects.equals(intent.getAction(), Intent.ACTION_USER_UNLOCKED)) {
++                mRearLauncherConnection.refresh();
+                 // Start the launcher connection to the launcher service
+                 // Connect if user hasn't connected yet
+                 if (getProxy() == null) {
+@@ -616,7 +620,7 @@
+             addInterface(mSysuiUnlockAnimationController, params);
+             addInterface(mUnfoldTransitionProgressForwarder.orElse(null), params);
+             // Add all the interfaces exposed by the shell
+-            mShellInterface.createExternalInterfaces(params);
++            createSharedShellInterfaces(params);
+ 
+             try {
+                 Log.d(TAG_OPS, "LauncherProxyService connected, initializing launcher proxy");
+@@ -706,6 +710,7 @@
+             new UserTracker.Callback() {
+                 @Override
+                 public void onUserChanged(int newUser, @NonNull Context userContext) {
++                    mRearLauncherConnection.setUser(newUser);
+                     if (Flags.launcherProxyServiceShortReconnect()
+                             && newUser == mCurrentBoundedUserId) {
+                         return;
+@@ -775,6 +780,9 @@
+         mShellInterface = shellInterface;
+         mShadeViewControllerLazy = shadeViewControllerLazy;
+         mHandler = new Handler();
++        mRearLauncherConnection = new OemRearLauncherConnection(context, mHandler,
++                userTracker.getUserId(), mIsSystemOrVisibleBgUser ? context.getString(
++                        com.android.internal.R.string.config_oemRearDisplayUniqueId) : "");
+         mNavBarControllerLazy = navBarControllerLazy;
+         mScreenPinningRequest = screenPinningRequest;
+         mStatusBarWinController = statusBarWinController;
+@@ -861,6 +869,20 @@
+ 
+         // Listen for assistant changes
+         assistUtils.registerVoiceInteractionSessionListener(mVoiceInteractionSessionListener);
++        mHandler.post(() -> {
++            // Rear boot must not require the primary launcher process to have connected first.
++            // A later primary connection refreshes this same shared set and reinitializes rear.
++            if (mRearLauncherConnection.isConfigured() && !mShellInterfacesCreated) {
++                createSharedShellInterfaces(new Bundle());
++            }
++        });
++    }
++
++    private void createSharedShellInterfaces(Bundle output) {
++        mRearLauncherConnection.beforeShellInterfacesChanged();
++        mShellInterface.createExternalInterfaces(output);
++        mShellInterfacesCreated = true;
++        mRearLauncherConnection.setShellInterfaces(output);
+     }
+ 
+     public boolean isSystemOrVisibleBgUser() {
+@@ -1355,6 +1377,7 @@
+     @Override
+     public void dump(PrintWriter pw, String[] args) {
+         pw.println(TAG_OPS + " state:");
++        mRearLauncherConnection.dump(pw);
+         pw.print("  isConnected="); pw.println(mLauncherProxy != null);
+         pw.print("  mIsEnabled="); pw.println(isEnabled());
+         pw.print("  mRecentsComponentName="); pw.println(mRecentsComponentName);
+diff --git a/packages/SystemUI/src/com/android/systemui/recents/OemRearLauncherConnection.java b/packages/SystemUI/src/com/android/systemui/recents/OemRearLauncherConnection.java
+new file mode 100644
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/recents/OemRearLauncherConnection.java
+@@ -0,0 +1,278 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.recents;
++
++import android.Manifest;
++import android.content.BroadcastReceiver;
++import android.content.ComponentName;
++import android.content.Context;
++import android.content.Intent;
++import android.content.IntentFilter;
++import android.content.ServiceConnection;
++import android.content.pm.PackageManager;
++import android.content.pm.ServiceInfo;
++import android.hardware.display.DisplayManager;
++import android.os.Bundle;
++import android.os.Handler;
++import android.os.IBinder;
++import android.os.Parcel;
++import android.os.PatternMatcher;
++import android.os.RemoteException;
++import android.os.UserHandle;
++import android.util.Log;
++import android.view.Display;
++import android.view.DisplayInfo;
++
++import java.io.PrintWriter;
++
++/** Main-thread owner of the official rear launcher's independent service connection. */
++public final class OemRearLauncherConnection {
++    private static final String TAG = "OemRearLauncher";
++    private static final String PACKAGE = "com.xiaomi.subscreencenter";
++    private static final ComponentName COMPONENT = new ComponentName(PACKAGE,
++            PACKAGE + ".gesture.TouchInteractionService");
++    private static final String LAUNCHER = "com.android.systemui.shared.recents.ILauncherProxy";
++    private static final String RECENTS = "com.android.wm.shell.recents.IRecentTasks";
++    private static final String TRANSITIONS = "com.android.wm.shell.shared.IShellTransitions";
++    private static final long BIND_TIMEOUT_MS = 10000;
++
++    private final Context mContext;
++    private final Handler mHandler;
++    private final DisplayManager mDisplays;
++    private final String mDisplayUniqueId;
++    private final Runnable mRetry = this::refresh;
++    private int mUserId;
++    private long mRetryDelay = 1000;
++    private IBinder mRecentTasks;
++    private IBinder mTransitions;
++    private Connection mConnection;
++    private OemRearRecentTasks mRecentAccess;
++    private OemRearShellTransitions mTransitionAccess;
++
++    public OemRearLauncherConnection(Context context, Handler handler, int userId,
++            String displayUniqueId) {
++        mContext = context;
++        mHandler = handler;
++        mUserId = userId;
++        mDisplayUniqueId = displayUniqueId;
++        mDisplays = context.getSystemService(DisplayManager.class);
++        if (!isConfigured()) return;
++        mDisplays.registerDisplayListener(new DisplayManager.DisplayListener() {
++            @Override public void onDisplayAdded(int displayId) { refresh(); }
++            @Override public void onDisplayChanged(int displayId) { refresh(); }
++            @Override public void onDisplayRemoved(int displayId) { refresh(); }
++        }, handler);
++        IntentFilter filter = new IntentFilter(Intent.ACTION_PACKAGE_ADDED);
++        filter.addAction(Intent.ACTION_PACKAGE_CHANGED);
++        filter.addAction(Intent.ACTION_PACKAGE_REPLACED);
++        filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
++        filter.addDataScheme("package");
++        filter.addDataSchemeSpecificPart(PACKAGE, PatternMatcher.PATTERN_LITERAL);
++        context.registerReceiver(new BroadcastReceiver() {
++            @Override
++            public void onReceive(Context context, Intent intent) {
++                mRetryDelay = 1000;
++                refresh();
++            }
++        }, filter, null, handler, Context.RECEIVER_EXPORTED);
++    }
++
++    public boolean isConfigured() {
++        return !mDisplayUniqueId.isEmpty() && mDisplays != null;
++    }
++
++    public void setUser(int userId) {
++        if (mUserId != userId) {
++            disconnect();
++            mUserId = userId;
++            mRetryDelay = 1000;
++        }
++        refresh();
++    }
++
++    /** Pause access before replacing the shared facade, without removing live registrations. */
++    public void beforeShellInterfacesChanged() {
++        if (mRecentAccess != null) mRecentAccess.suspendDelegate();
++        if (mTransitionAccess != null) mTransitionAccess.suspendDelegate();
++        mRecentTasks = null;
++        mTransitions = null;
++    }
++
++    public void setShellInterfaces(Bundle interfaces) {
++        mRecentTasks = interfaces.getBinder(RECENTS);
++        mTransitions = interfaces.getBinder(TRANSITIONS);
++        if (mConnection != null && mConnection.service != null) initialize(mConnection);
++        refresh();
++    }
++
++    private boolean hasRearDisplay() {
++        if (!isConfigured()) return false;
++        for (Display display : mDisplays.getDisplays()) {
++            DisplayInfo info = new DisplayInfo();
++            if (display.getDisplayId() != Display.DEFAULT_DISPLAY && display.getDisplayInfo(info)
++                    && info.type == Display.TYPE_INTERNAL
++                    && mDisplayUniqueId.equals(info.uniqueId)) return true;
++        }
++        return false;
++    }
++
++    private ServiceInfo resolveService() {
++        try {
++            PackageManager pm = mContext.createContextAsUser(UserHandle.of(mUserId), 0)
++                    .getPackageManager();
++            ServiceInfo service = pm.getServiceInfo(COMPONENT,
++                    PackageManager.MATCH_DIRECT_BOOT_AWARE
++                            | PackageManager.MATCH_DIRECT_BOOT_UNAWARE);
++            if (!service.enabled || !service.applicationInfo.enabled || !service.exported
++                    || !service.applicationInfo.isSystemApp()
++                    || !Manifest.permission.STATUS_BAR_SERVICE.equals(service.permission)
++                    || pm.checkSignatures("android", PACKAGE) != PackageManager.SIGNATURE_MATCH) {
++                Log.w(TAG, "Official rear service does not meet the system identity contract");
++                return null;
++            }
++            return service;
++        } catch (PackageManager.NameNotFoundException e) {
++            return null;
++        }
++    }
++
++    public void refresh() {
++        mHandler.removeCallbacks(mRetry);
++        if (!hasRearDisplay() || mRecentTasks == null || mTransitions == null) {
++            disconnect();
++            return;
++        }
++        ServiceInfo service = resolveService();
++        if (service == null) {
++            disconnect();
++            return;
++        }
++        if (mConnection != null) {
++            if (mConnection.uid == service.applicationInfo.uid) return;
++            disconnect();
++        }
++        Connection connection = new Connection(service.applicationInfo.uid);
++        mConnection = connection;
++        try {
++            connection.bound = mContext.bindServiceAsUser(
++                    new Intent("android.intent.action.QUICKSTEP_SERVICE").setComponent(COMPONENT),
++                    connection, Context.BIND_AUTO_CREATE | Context.BIND_FOREGROUND_SERVICE_WHILE_AWAKE,
++                    UserHandle.of(mUserId));
++        } catch (SecurityException e) {
++            Log.w(TAG, "Rear service binding rejected", e);
++        }
++        if (connection.bound) mHandler.postDelayed(connection.timeout, BIND_TIMEOUT_MS);
++        else failed(connection, "bind failed");
++    }
++
++    private void initialize(Connection connection) {
++        if (mConnection != connection || mRecentTasks == null || mTransitions == null) return;
++        if (mRecentAccess == null) {
++            mRecentAccess = new OemRearRecentTasks(mRecentTasks, connection.uid);
++            mTransitionAccess = new OemRearShellTransitions(mTransitions, connection.uid);
++        } else {
++            // The APK retains its registration flag across onInitialize. Shell facade replacement
++            // does not remove its remote filters, so retain both registrations and wrapper identity.
++            mRecentAccess.setDelegate(mRecentTasks);
++            mTransitionAccess.setDelegate(mTransitions);
++        }
++        Bundle parameters = new Bundle();
++        parameters.putBinder(RECENTS, mRecentAccess);
++        parameters.putBinder(TRANSITIONS, mTransitionAccess);
++        Parcel data = Parcel.obtain(connection.service);
++        try {
++            // Both the original and platform ILauncherProxy define onInitialize as transaction 13.
++            data.writeInterfaceToken(LAUNCHER);
++            data.writeTypedObject(parameters, 0);
++            if (!connection.service.transact(13, data, null, IBinder.FLAG_ONEWAY)) {
++                throw new RemoteException("Rear launcher rejected onInitialize");
++            }
++            mRetryDelay = 1000;
++        } catch (RemoteException e) {
++            Log.w(TAG, "Rear initialization failed", e);
++            failed(connection, "initialization failed");
++        } finally {
++            data.recycle();
++        }
++    }
++
++    private void revokeAccess() {
++        if (mRecentAccess != null) mRecentAccess.invalidate();
++        if (mTransitionAccess != null) mTransitionAccess.invalidate();
++        mRecentAccess = null;
++        mTransitionAccess = null;
++    }
++
++    private void disconnect() {
++        mHandler.removeCallbacks(mRetry);
++        revokeAccess();
++        Connection old = mConnection;
++        mConnection = null;
++        if (old == null) return;
++        mHandler.removeCallbacks(old.timeout);
++        if (old.service != null) old.service.unlinkToDeath(old.death, 0);
++        if (old.bound) mContext.unbindService(old);
++    }
++
++    private void failed(Connection connection, String reason) {
++        if (connection != mConnection) return;
++        Log.w(TAG, "Rear connection lost: " + reason);
++        disconnect();
++        mHandler.postDelayed(mRetry, mRetryDelay);
++        mRetryDelay = Math.min(60000, mRetryDelay * 2);
++    }
++
++    public void dump(PrintWriter pw) {
++        pw.println("  rearLauncher: configured=" + isConfigured() + " user=" + mUserId
++                + " bound=" + (mConnection != null && mConnection.bound)
++                + " connected=" + (mConnection != null && mConnection.service != null)
++                + " shellReady=" + (mRecentTasks != null && mTransitions != null));
++    }
++
++    private final class Connection implements ServiceConnection {
++        final int uid;
++        boolean bound;
++        IBinder service;
++        final Runnable timeout = () -> failed(this, "binding timeout");
++        final IBinder.DeathRecipient death = () -> mHandler.post(() -> failed(this, "binder death"));
++
++        Connection(int uid) { this.uid = uid; }
++
++        @Override
++        public void onServiceConnected(ComponentName name, IBinder binder) {
++            if (mConnection != this) return;
++            mHandler.removeCallbacks(timeout);
++            try {
++                if (!COMPONENT.equals(name) || !LAUNCHER.equals(binder.getInterfaceDescriptor())) {
++                    throw new RemoteException("Unexpected rear service interface");
++                }
++                binder.linkToDeath(death, 0);
++                service = binder;
++                initialize(this);
++            } catch (RemoteException e) {
++                Log.w(TAG, "Rear service connection failed", e);
++                failed(this, "service interface failed");
++            }
++        }
++
++        @Override public void onServiceDisconnected(ComponentName name) {
++            failed(this, "service disconnected");
++        }
++        @Override public void onBindingDied(ComponentName name) { failed(this, "binding died"); }
++        @Override public void onNullBinding(ComponentName name) { failed(this, "null binding"); }
++    }
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/recents/OemRearRecentTasks.java b/packages/SystemUI/src/com/android/systemui/recents/OemRearRecentTasks.java
+new file mode 100644
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/recents/OemRearRecentTasks.java
+@@ -0,0 +1,91 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.recents;
++
++import android.os.Binder;
++import android.os.DeadObjectException;
++import android.os.IBinder;
++import android.os.Parcel;
++import android.os.RemoteException;
++
++import java.util.Objects;
++
++/** Revocable access to the real recents transition entry consumed by the official rear APK. */
++public final class OemRearRecentTasks extends Binder {
++    private static final String DESCRIPTOR = "com.android.wm.shell.recents.IRecentTasks";
++    private volatile IBinder mDelegate;
++    private final int mCallerUid;
++    private volatile boolean mActive = true;
++    private volatile boolean mSuspended;
++    private final Object mStateLock = new Object();
++
++    public OemRearRecentTasks(IBinder delegate, int callerUid) {
++        mDelegate = Objects.requireNonNull(delegate);
++        mCallerUid = callerUid;
++        attachInterface(null, DESCRIPTOR);
++    }
++
++    public void suspendDelegate() {
++        synchronized (mStateLock) {
++            mSuspended = true;
++        }
++    }
++
++    public void setDelegate(IBinder delegate) {
++        synchronized (mStateLock) {
++            if (!mActive) throw new IllegalStateException("Rear connection already revoked");
++            mDelegate = Objects.requireNonNull(delegate);
++            mSuspended = false;
++            mStateLock.notifyAll();
++        }
++    }
++
++    public void invalidate() {
++        synchronized (mStateLock) {
++            mActive = false;
++            mStateLock.notifyAll();
++        }
++    }
++
++    @Override
++    protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
++            throws RemoteException {
++        if (code == INTERFACE_TRANSACTION) {
++            reply.writeString(DESCRIPTOR);
++            return true;
++        }
++        // startRecentsTransitionX has the platform's transaction 6 / six-argument layout.
++        // Do not expose listener registration: Shell has a single listener owned by main Launcher.
++        if (code != 6) return super.onTransact(code, data, reply, flags);
++        if (Binder.getCallingUid() != mCallerUid) {
++            throw new SecurityException("Caller is not the bound rear launcher");
++        }
++        synchronized (mStateLock) {
++            while (mActive && mSuspended) {
++                try {
++                    mStateLock.wait();
++                } catch (InterruptedException e) {
++                    Thread.currentThread().interrupt();
++                    throw new RemoteException("Interrupted waiting for rear Shell interface");
++                }
++            }
++            if (!mActive) throw new DeadObjectException("Rear launcher connection closed");
++            // Shell's oneway start entry posts to its executor without calling the runner here.
++            return mDelegate.transact(code, data, reply, flags);
++        }
++    }
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/recents/OemRearShellTransitions.java b/packages/SystemUI/src/com/android/systemui/recents/OemRearShellTransitions.java
+--- a/packages/SystemUI/src/com/android/systemui/recents/OemRearShellTransitions.java
++++ b/packages/SystemUI/src/com/android/systemui/recents/OemRearShellTransitions.java
+@@ -17,9 +17,12 @@
+ package com.android.systemui.recents;
+ 
+ import android.os.Binder;
++import android.os.DeadObjectException;
+ import android.os.IBinder;
+ import android.os.Parcel;
+ import android.os.RemoteException;
++import android.util.ArrayMap;
++import android.util.Log;
+ import android.window.RemoteTransition;
+ import android.window.TransitionFilter;
+ 
+@@ -40,8 +43,11 @@
+     private static final int GET_HOME_OVERLAY = 6;
+     private static final int REGISTER_TAKEOVER = 7;
+ 
+-    private final IBinder mDelegate;
++    private volatile IBinder mDelegate;
+     private final int mCallerUid;
++    private final ArrayMap<IBinder, RemoteTransition> mRegistrations = new ArrayMap<>();
++    private volatile boolean mActive = true;
++    private volatile boolean mSuspended;
+ 
+     public OemRearShellTransitions(IBinder delegate, int callerUid) {
+         mDelegate = Objects.requireNonNull(delegate);
+@@ -70,15 +76,37 @@
+             default:
+                 return super.onTransact(code, data, reply, flags);
+         }
+-        if (code != REGISTER_REMOTE && code != REGISTER_TAKEOVER) {
+-            // These three transactions retain their original IDs and Parcel layouts.
+-            return mDelegate.transact(code, data, reply, flags);
++        if (code == GET_APPLY_TOKEN || code == GET_HOME_OVERLAY) {
++            IBinder delegate;
++            synchronized (mRegistrations) {
++                awaitDelegateLocked();
++                delegate = mDelegate;
++            }
++            // These synchronous queries must not hold the registration lock while waiting on Shell.
++            return delegate.transact(code, data, reply, flags);
+         }
+         data.enforceInterface(DESCRIPTOR);
+-        TransitionFilter filter = data.readTypedObject(TransitionFilter.CREATOR);
++        TransitionFilter filter = code == UNREGISTER_REMOTE ? null
++                : data.readTypedObject(TransitionFilter.CREATOR);
+         RemoteTransition remote = data.readTypedObject(RemoteTransition.CREATOR);
+         data.enforceNoDataAvail();
+-        Objects.requireNonNull(remote, "remoteTransition").setFilter(filter);
++        Objects.requireNonNull(remote, "remoteTransition");
++        if (code != UNREGISTER_REMOTE) remote.setFilter(filter);
++        // Serialize registration and revocation. Shell's oneway entry posts to its executor;
++        // it does not call the remote animation while handling this transaction.
++        synchronized (mRegistrations) {
++            awaitDelegateLocked();
++            boolean handled = forwardRemote(code, remote, reply, flags);
++            if (handled) {
++                if (code == UNREGISTER_REMOTE) mRegistrations.remove(remote.asBinder());
++                else mRegistrations.put(remote.asBinder(), remote);
++            }
++            return handled;
++        }
++    }
++
++    private boolean forwardRemote(int code, RemoteTransition remote, Parcel reply, int flags)
++            throws RemoteException {
+         Parcel translated = Parcel.obtain(mDelegate);
+         try {
+             translated.writeInterfaceToken(DESCRIPTOR);
+@@ -88,4 +116,54 @@
+             translated.recycle();
+         }
+     }
++
++    private void awaitDelegateLocked() throws RemoteException {
++        while (mActive && mSuspended) {
++            try {
++                mRegistrations.wait();
++            } catch (InterruptedException e) {
++                Thread.currentThread().interrupt();
++                throw new RemoteException("Interrupted waiting for rear Shell interface");
++            }
++        }
++        if (!mActive) throw new DeadObjectException("Rear launcher connection closed");
++    }
++
++    /** Pause calls while Shell replaces its external facade; registrations remain in Shell. */
++    public void suspendDelegate() {
++        synchronized (mRegistrations) {
++            mSuspended = true;
++        }
++    }
++
++    public void setDelegate(IBinder delegate) {
++        synchronized (mRegistrations) {
++            if (!mActive) throw new IllegalStateException("Rear connection already revoked");
++            mDelegate = Objects.requireNonNull(delegate);
++            mSuspended = false;
++            mRegistrations.notifyAll();
++        }
++    }
++
++    /** Revoke this connection and unregister its animations without invalidating shared Shell. */
++    public void invalidate() {
++        ArrayMap<IBinder, RemoteTransition> registrations;
++        synchronized (mRegistrations) {
++            if (!mActive) return;
++            mActive = false;
++            mRegistrations.notifyAll();
++            registrations = new ArrayMap<>(mRegistrations);
++            mRegistrations.clear();
++        }
++        for (int i = 0; i < registrations.size(); i++) {
++            try {
++                if (!forwardRemote(UNREGISTER_REMOTE, registrations.valueAt(i), null,
++                        IBinder.FLAG_ONEWAY)) {
++                    Log.w("OemRearShellTransitions", "Shell rejected animation cleanup");
++                }
++            } catch (RemoteException e) {
++                Log.w("OemRearShellTransitions", "Failed to unregister rear animation", e);
++            }
++        }
++    }
+ }

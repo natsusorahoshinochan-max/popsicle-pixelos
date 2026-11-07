@@ -1,0 +1,166 @@
+--- a/services/camera/libcameraservice/utils/SessionConfigurationUtils.cpp
++++ b/services/camera/libcameraservice/utils/SessionConfigurationUtils.cpp
+@@ -15,6 +15,7 @@
+  */
+ 
+ #include <cutils/properties.h>
++#include "XiaomiStreamConfiguration.h"
+ 
+ #include "SessionConfigurationUtils.h"
+ #include <android/data_space.h>
+@@ -530,7 +531,8 @@
+         const CameraMetadata &physicalCameraMetadata,
+         const std::vector<int32_t> &sensorPixelModesUsed, int64_t dynamicRangeProfile,
+         int64_t streamUseCase, int timestampBase, int mirrorMode,
+-        int32_t colorSpace, bool respectSurfaceSize, int32_t multiResMode, bool isPriviledgedClient) {
++        int32_t colorSpace, bool respectSurfaceSize, int32_t multiResMode, bool isPriviledgedClient,
++        bool isXiaomiCameraClient) {
+     // bufferProducer must be non-null
+     if ( flagtools::isSurfaceTypeValid(surface) == false ) {
+         std::string msg = fmt::sprintf("Camera %s: Surface is NULL", logicalCameraId.c_str());
+@@ -616,7 +618,14 @@
+     // Round dimensions to the nearest dimensions available for this format.
+     // Only do the rounding if the client doesn't ask to respect the surface
+     // size.
++    // Xiaomi's ordinary stream table does not describe HEIC, JPEG_R or depth payloads.
++    const bool isOrdinaryStream = dataSpace != HAL_DATASPACE_DEPTH &&
++            (format != HAL_PIXEL_FORMAT_BLOB ||
++             dataSpace == static_cast<android_dataspace>(HAL_DATASPACE_V0_JFIF));
++    const bool preserveVendorSize = isOrdinaryStream && xiaomi::preserveDimensions(
++            physicalCameraMetadata, format, width, height, isXiaomiCameraClient);
+     if (flexibleConsumer && isPublicFormat(format) && !respectSurfaceSize &&
++            !preserveVendorSize &&
+             !SessionConfigurationUtils::roundBufferDimensionNearest(width, height,
+             format, dataSpace, physicalCameraMetadata, foundInMaxRes, /*out*/&width,
+             /*out*/&height, isPriviledgedClient)) {
+--- a/services/camera/libcameraservice/utils/SessionConfigurationUtils.h
++++ b/services/camera/libcameraservice/utils/SessionConfigurationUtils.h
+@@ -114,7 +114,8 @@
+         const CameraMetadata &physicalCameraMetadata,
+         const std::vector<int32_t> &sensorPixelModesUsed,  int64_t dynamicRangeProfile,
+         int64_t streamUseCase, int timestampBase, int mirrorMode,
+-        int32_t colorSpace, bool respectSurfaceSize, int32_t multiResMode, bool isPriviledgedClient=false);
++        int32_t colorSpace, bool respectSurfaceSize, int32_t multiResMode, bool isPriviledgedClient=false,
++        bool isXiaomiCameraClient=false);
+ 
+ //check if format is 10-bit output compatible
+ bool is10bitCompatibleFormat(int32_t format, android_dataspace_t dataSpace);
+--- a/services/camera/libcameraservice/api2/CameraDeviceClient.cpp
++++ b/services/camera/libcameraservice/api2/CameraDeviceClient.cpp
+@@ -1313,7 +1313,8 @@
+                 flagtools::convertParcelableSurfaceTypeToSurface(surface), mCameraIdStr,
+                 mDevice->info(), mDevice->infoPhysical(physicalCameraId), sensorPixelModesUsed,
+                 dynamicRangeProfile, streamUseCase, timestampBase, mirrorMode, colorSpace,
+-                /*respectSurfaceSize*/false, multiResMode, mPrivilegedClient);
++                /*respectSurfaceSize*/false, multiResMode, mPrivilegedClient,
++                getPackageName() == "com.android.camera");
+ 
+         if (!res.isOk())
+             return res;
+@@ -1781,7 +1782,7 @@
+                 mCameraIdStr, mDevice->info(), mDevice->infoPhysical(physicalCameraId),
+                 sensorPixelModesUsed, dynamicRangeProfile, streamUseCase, timestampBase,
+                 mirrorMode, colorSpace, /*respectSurfaceSize*/ false, multiResMode,
+-                mPrivilegedClient);
++                mPrivilegedClient, getPackageName() == "com.android.camera");
+         if (!res.isOk()) return res;
+ 
+         streamInfos.push_back(outInfo);
+@@ -2256,7 +2257,7 @@
+                 mCameraIdStr, mDevice->info(), mDevice->infoPhysical(physicalId),
+                 sensorPixelModesUsed, dynamicRangeProfile, streamUseCase, timestampBase,
+                 mirrorMode, colorSpace, /*respectSurfaceSize*/ false, multiResMode,
+-                mPrivilegedClient);
++                mPrivilegedClient, getPackageName() == "com.android.camera");
+ 
+         if (!res.isOk()) return res;
+ 
+--- a/services/camera/libcameraservice/device3/Camera3Device.cpp
++++ b/services/camera/libcameraservice/device3/Camera3Device.cpp
+@@ -42,6 +42,7 @@
+     "%s: " fmt, __FUNCTION__,                    \
+     ##__VA_ARGS__)
+ 
++#include "utils/XiaomiStreamConfiguration.h"
+ #include <inttypes.h>
+ 
+ #include <utility>
+@@ -503,6 +504,16 @@
+                 SessionConfigurationUtils::getUHRMaxJpegBufferSize(uhrMaxJpegResolution,
+                         maxDefaultJpegResolution, maxJpegBufferSize);
+         chosenMaxJpegResolution = uhrMaxJpegResolution;
++    }
++    // The OEM extension can advertise JPEG outputs larger than both standard tables.
++    // Scale capacity only for an exact supported output; retain the ordinary size clamp.
++    if (static_cast<int64_t>(width) * height >
++                    static_cast<int64_t>(chosenMaxJpegResolution.width) *
++                            chosenMaxJpegResolution.height &&
++            camera3::xiaomi::containsVendorOutput(info, HAL_PIXEL_FORMAT_BLOB, width, height)) {
++        maxJpegBufferSize = SessionConfigurationUtils::getUHRMaxJpegBufferSize(
++                camera3::Size(width, height), chosenMaxJpegResolution, maxJpegBufferSize);
++        chosenMaxJpegResolution = camera3::Size(width, height);
+     }
+     assert(kMinJpegBufferSize < maxJpegBufferSize);
+ 
+--- /dev/null
++++ b/services/camera/libcameraservice/utils/XiaomiStreamConfiguration.h
+@@ -0,0 +1,59 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++#pragma once
++
++#include <camera/CameraMetadata.h>
++#include <camera/VendorTagDescriptor.h>
++#include <system/graphics.h>
++
++namespace android::camera3::xiaomi {
++
++inline camera_metadata_ro_entry_t findVendorEntry(const CameraMetadata& info, const char* name) {
++    sp<VendorTagDescriptor> descriptor;
++    auto cache = VendorTagDescriptorCache::getGlobalVendorTagCache();
++    if (cache != nullptr) {
++        cache->getVendorTagDescriptor(info.getVendorId(), &descriptor);
++    }
++    uint32_t tag;
++    if (CameraMetadata::getTagFromName(name, descriptor.get(), &tag) != OK) return {};
++    return info.find(tag);
++}
++
++inline bool containsOutput(camera_metadata_ro_entry_t entry, int32_t format,
++        int32_t width, int32_t height) {
++    if (entry.type != TYPE_INT32 || entry.count % 4 != 0 || width <= 0 || height <= 0) {
++        return false;
++    }
++    for (size_t i = 0; i < entry.count; i += 4) {
++        const int32_t* tuple = entry.data.i32 + i;
++        if (tuple[0] == format && tuple[1] == width && tuple[2] == height &&
++                tuple[3] == ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT) return true;
++    }
++    return false;
++}
++
++inline bool containsVendorOutput(const CameraMetadata& info, int32_t format,
++        int32_t width, int32_t height) {
++    auto entry = findVendorEntry(info, "xiaomi.scaler.availableStreamConfigurations");
++    if (entry.count == 0) {
++        entry = findVendorEntry(info, "com.xiaomi.scaler.availableStreamConfigurations");
++    }
++    return containsOutput(entry, format, width, height);
++}
++
++inline bool preserveDimensions(const CameraMetadata& info, int32_t format,
++        int32_t width, int32_t height, bool isXiaomiCameraClient) {
++    auto role = findVendorEntry(info, "com.xiaomi.cameraid.role.cameraId");
++    const bool isMock = role.type == TYPE_INT32 && role.count == 1 && role.data.i32[0] == 108;
++    // Mock cameras are SYSTEM_CAMERA devices; service permission checks still apply.
++    // Unlike the OEM's unconditional Mock bypass, accept only advertised output tuples.
++    if (isMock && (containsOutput(info.find(ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS),
++                    format, width, height) ||
++            containsOutput(info.find(ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_MAXIMUM_RESOLUTION),
++                    format, width, height))) return true;
++    return (isMock || isXiaomiCameraClient) && containsVendorOutput(info, format, width, height);
++}
++
++} // namespace android::camera3::xiaomi

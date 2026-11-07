@@ -1,0 +1,47 @@
+--- a/libs/gui/aidl/android/gui/ISurfaceComposer.aidl
++++ b/libs/gui/aidl/android/gui/ISurfaceComposer.aidl
+@@ -683,4 +683,6 @@
+      * Requires root
+      */
+      void resetForcedPacesetter();
++    /** Returns physical mode IDs whose native configurations contain VRR support. */
++    int[] getArrDisplayModeIds(long displayId);
+ }
+--- a/services/surfaceflinger/SurfaceFlinger.h
++++ b/services/surfaceflinger/SurfaceFlinger.h
+@@ -1808,6 +1808,8 @@
+                                    gui::DisplayState* outState) override;
+     binder::Status getStaticDisplayInfo(int64_t displayId,
+                                         gui::StaticDisplayInfo* outInfo) override;
++    binder::Status getArrDisplayModeIds(int64_t displayId,
++                                      std::vector<int32_t>* modeIds) override;
+     binder::Status getDynamicDisplayInfoFromId(int64_t displayId,
+                                                gui::DynamicDisplayInfo* outInfo) override;
+     binder::Status getDynamicDisplayInfoFromToken(const sp<IBinder>& display,
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -10159,6 +10159,24 @@
+     return binderStatusFromStatusT(status);
+ }
+ 
++binder::Status SurfaceComposerAIDL::getArrDisplayModeIds(
++        int64_t displayId, std::vector<int32_t>* modeIds) {
++    status_t status = checkAccessPermission();
++    if (status != OK) return binderStatusFromStatusT(status);
++    Mutex::Autolock lock(mFlinger->mStateLock);
++    const auto id = PhysicalDisplayId::fromValue(static_cast<uint64_t>(displayId));
++    const auto displayOpt = mFlinger->mPhysicalDisplays.get(id).and_then(
++            mFlinger->getDisplayDeviceAndSnapshot());
++    if (!displayOpt) return binderStatusFromStatusT(NAME_NOT_FOUND);
++    modeIds->clear();
++    for (const auto& [modeId, mode] : displayOpt->second.get().displayModes()) {
++        if (mode->getVrrConfig().has_value()) {
++            modeIds->push_back(ftl::to_underlying(modeId));
++        }
++    }
++    return binder::Status::ok();
++}
++
+ binder::Status SurfaceComposerAIDL::getDynamicDisplayInfoFromId(int64_t displayId,
+                                                                 gui::DynamicDisplayInfo* outInfo) {
+     ui::DynamicDisplayInfo info;

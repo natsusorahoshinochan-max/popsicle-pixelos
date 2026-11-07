@@ -1,0 +1,41 @@
+--- a/cmds/installd/OemRearStorage.h
++++ b/cmds/installd/OemRearStorage.h
+@@ -19,7 +19,6 @@
+ #include <android-base/unique_fd.h>
+ #include <cutils/multiuser.h>
+ #include <private/android_filesystem_config.h>
+-#include <selinux/context.h>
+ #include <selinux/selinux.h>
+ 
+ #include <errno.h>
+@@ -136,20 +135,17 @@
+     }
+     char* original = nullptr;
+     if (fgetfilecon(app.get(), &original) < 0) return -1;
+-    context_t context = context_new(original);
++    const std::string originalLabel(original);
+     freecon(original);
+-    if (context == nullptr) return -1;
+-    if (context_type_set(context, "popsicle_rear_theme_data_file") != 0) {
+-        context_free(context);
+-        return -1;
+-    }
+-    const char* raw = context_str(context);
+-    if (raw == nullptr) {
+-        context_free(context);
+-        return -1;
+-    }
+-    const std::string appLabel(raw);
+-    context_free(context);
++    // This exact seapp mapping uses app_data_file. Preserve the entire
++    // kernel-validated MLS suffix; no category calculation or context_* ABI.
++    const std::string prefix = "u:object_r:app_data_file:";
++    if (originalLabel.compare(0, prefix.size(), prefix) != 0) {
++        errno = EINVAL;
++        return -1;
++    }
++    const auto appLabel = "u:object_r:popsicle_rear_theme_data_file:"
++            + originalLabel.substr(prefix.size());
+ 
+     base::unique_fd system(open(systemDataPath.c_str(),
+                                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));

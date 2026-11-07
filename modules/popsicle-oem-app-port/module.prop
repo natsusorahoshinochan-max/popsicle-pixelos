@@ -1,0 +1,6 @@
+id=popsicle-oem-app-port
+name=PixelOS official camera and rear App ROM test
+version=0.20
+versionCode=20
+author=PixelOS popsicle bring-up
+description=OEM APKs and matching PixelOS runtime adapters. Experimental; disable and reboot to restore the installed ROM.

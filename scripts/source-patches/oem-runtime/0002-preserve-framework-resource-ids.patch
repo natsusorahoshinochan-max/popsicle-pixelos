@@ -1,0 +1,21 @@
+diff --git a/core/res/Android.bp b/core/res/Android.bp
+--- a/core/res/Android.bp
++++ b/core/res/Android.bp
+@@ -124,6 +124,8 @@
+ 
+     // Generate private symbols into the com.android.internal.R class
+     // so they are not accessible to 3rd party apps.
++    // Keep existing private resource IDs compatible with the delivered PixelOS ROM.
++    stable_resource_ids: "popsicle-resource-ids.txt",
+     aaptflags: [
+         "--private-symbols",
+         "com.android.internal",
+diff --git a/core/res/popsicle-resource-ids.txt b/core/res/popsicle-resource-ids.txt
+new file mode 100644
+--- /dev/null
++++ b/core/res/popsicle-resource-ids.txt
+@@ -0,0 +1,4 @@
++android:bool/config_enableOemCameraActivityScene = 0x01110325
++android:bool/config_oemRearSmartAssistantSupported = 0x01110326
++android:string/config_oemRearDisplayUniqueId = 0x01040bdf
++android:string/config_oemRearHomeComponent = 0x01040be0

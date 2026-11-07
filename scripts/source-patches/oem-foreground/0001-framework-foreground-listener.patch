@@ -1,0 +1,561 @@
+diff --git a/core/java/miui/process/ForegroundInfo.java b/core/java/miui/process/ForegroundInfo.java
+new file mode 100644
+--- /dev/null
++++ b/core/java/miui/process/ForegroundInfo.java
+@@ -0,0 +1,118 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package miui.process;
++
++import android.compat.annotation.UnsupportedAppUsage;
++import android.os.Parcel;
++import android.os.Parcelable;
++
++/** Wire-compatible foreground snapshot used by the official camera and rear display. @hide */
++public final class ForegroundInfo implements Parcelable {
++    @UnsupportedAppUsage
++    public static final int FLAG_FOREGROUND_COLD_START = 1;
++
++    @UnsupportedAppUsage
++    public String mForegroundPackageName;
++    @UnsupportedAppUsage
++    public int mForegroundUid = -1;
++    @UnsupportedAppUsage
++    public int mForegroundPid = -1;
++    @UnsupportedAppUsage
++    public int mForegroundDisplayId = -1;
++    @UnsupportedAppUsage
++    public String mLastForegroundPackageName;
++    @UnsupportedAppUsage
++    public int mLastForegroundUid = -1;
++    @UnsupportedAppUsage
++    public int mLastForegroundPid = -1;
++    @UnsupportedAppUsage
++    public int mLastForegroundDisplayId = -1;
++    @UnsupportedAppUsage
++    public String mMultiWindowForegroundPackageName;
++    @UnsupportedAppUsage
++    public int mMultiWindowForegroundUid = -1;
++    @UnsupportedAppUsage
++    public int mFlags;
++
++    @UnsupportedAppUsage
++    public ForegroundInfo() {}
++
++    @UnsupportedAppUsage
++    public ForegroundInfo(ForegroundInfo other) {
++        mForegroundPackageName = other.mForegroundPackageName;
++        mForegroundUid = other.mForegroundUid;
++        mForegroundPid = other.mForegroundPid;
++        mForegroundDisplayId = other.mForegroundDisplayId;
++        mLastForegroundPackageName = other.mLastForegroundPackageName;
++        mLastForegroundUid = other.mLastForegroundUid;
++        mLastForegroundPid = other.mLastForegroundPid;
++        mLastForegroundDisplayId = other.mLastForegroundDisplayId;
++        mMultiWindowForegroundPackageName = other.mMultiWindowForegroundPackageName;
++        mMultiWindowForegroundUid = other.mMultiWindowForegroundUid;
++        mFlags = other.mFlags;
++    }
++
++    private ForegroundInfo(Parcel in) {
++        mForegroundPackageName = in.readString();
++        mForegroundUid = in.readInt();
++        mForegroundPid = in.readInt();
++        mForegroundDisplayId = in.readInt();
++        mLastForegroundPackageName = in.readString();
++        mLastForegroundUid = in.readInt();
++        mLastForegroundPid = in.readInt();
++        mLastForegroundDisplayId = in.readInt();
++        mMultiWindowForegroundPackageName = in.readString();
++        mMultiWindowForegroundUid = in.readInt();
++        mFlags = in.readInt();
++    }
++
++    @Override
++    public void writeToParcel(Parcel out, int flags) {
++        out.writeString(mForegroundPackageName);
++        out.writeInt(mForegroundUid);
++        out.writeInt(mForegroundPid);
++        out.writeInt(mForegroundDisplayId);
++        out.writeString(mLastForegroundPackageName);
++        out.writeInt(mLastForegroundUid);
++        out.writeInt(mLastForegroundPid);
++        out.writeInt(mLastForegroundDisplayId);
++        out.writeString(mMultiWindowForegroundPackageName);
++        out.writeInt(mMultiWindowForegroundUid);
++        out.writeInt(mFlags);
++    }
++
++    @Override
++    public int describeContents() { return 0; }
++
++    @UnsupportedAppUsage
++    public boolean isColdStart() { return (mFlags & FLAG_FOREGROUND_COLD_START) != 0; }
++
++    @UnsupportedAppUsage
++    public void addFlags(int flags) { mFlags |= flags; }
++
++    @UnsupportedAppUsage
++    public void resetFlags() { mFlags = 0; }
++
++    @UnsupportedAppUsage
++    public static final Creator<ForegroundInfo> CREATOR = new Creator<ForegroundInfo>() {
++        @Override
++        public ForegroundInfo createFromParcel(Parcel in) { return new ForegroundInfo(in); }
++
++        @Override
++        public ForegroundInfo[] newArray(int size) { return new ForegroundInfo[size]; }
++    };
++}
+diff --git a/core/java/miui/process/IForegroundInfoListener.java b/core/java/miui/process/IForegroundInfoListener.java
+new file mode 100644
+--- /dev/null
++++ b/core/java/miui/process/IForegroundInfoListener.java
+@@ -0,0 +1,89 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package miui.process;
++
++import android.compat.annotation.UnsupportedAppUsage;
++import android.os.Binder;
++import android.os.IBinder;
++import android.os.IInterface;
++import android.os.Parcel;
++import android.os.RemoteException;
++
++/** Original oneway callback protocol. @hide */
++public interface IForegroundInfoListener extends IInterface {
++    @UnsupportedAppUsage
++    void onForegroundInfoChanged(ForegroundInfo info) throws RemoteException;
++
++    /** @hide */
++    abstract class Stub extends Binder implements IForegroundInfoListener {
++        private static final String DESCRIPTOR = "miui.process.IForegroundInfoListener";
++
++        @UnsupportedAppUsage
++        public Stub() { attachInterface(this, DESCRIPTOR); }
++
++        @UnsupportedAppUsage
++        public static IForegroundInfoListener asInterface(IBinder binder) {
++            if (binder == null) return null;
++            IInterface local = binder.queryLocalInterface(DESCRIPTOR);
++            return local instanceof IForegroundInfoListener
++                    ? (IForegroundInfoListener) local : new Proxy(binder);
++        }
++
++        @Override
++        public IBinder asBinder() { return this; }
++
++        @Override
++        public boolean onTransact(int code, Parcel data, Parcel reply, int flags)
++                throws RemoteException {
++            if (code == INTERFACE_TRANSACTION) {
++                reply.writeString(DESCRIPTOR);
++                return true;
++            }
++            if (code == FIRST_CALL_TRANSACTION) {
++                data.enforceInterface(DESCRIPTOR);
++                ForegroundInfo info = data.readTypedObject(ForegroundInfo.CREATOR);
++                data.enforceNoDataAvail();
++                onForegroundInfoChanged(info);
++                return true;
++            }
++            return super.onTransact(code, data, reply, flags);
++        }
++
++        private static final class Proxy implements IForegroundInfoListener {
++            private final IBinder mRemote;
++
++            Proxy(IBinder remote) { mRemote = remote; }
++
++            @Override
++            public IBinder asBinder() { return mRemote; }
++
++            @Override
++            public void onForegroundInfoChanged(ForegroundInfo info) throws RemoteException {
++                Parcel data = Parcel.obtain();
++                try {
++                    data.writeInterfaceToken(DESCRIPTOR);
++                    data.writeTypedObject(info, 0);
++                    if (!mRemote.transact(FIRST_CALL_TRANSACTION, data, null, FLAG_ONEWAY)) {
++                        throw new RemoteException("Foreground callback transaction unsupported");
++                    }
++                } finally {
++                    data.recycle();
++                }
++            }
++        }
++    }
++}
+diff --git a/core/java/miui/process/ProcessManager.java b/core/java/miui/process/ProcessManager.java
+new file mode 100644
+--- /dev/null
++++ b/core/java/miui/process/ProcessManager.java
+@@ -0,0 +1,59 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package miui.process;
++
++import android.compat.annotation.UnsupportedAppUsage;
++import android.os.IBinder;
++import android.os.Parcel;
++import android.os.RemoteException;
++import android.os.ServiceManager;
++
++/** Narrow original entry point; no process-management operations are emulated. @hide */
++public final class ProcessManager {
++    private ProcessManager() {}
++
++    @UnsupportedAppUsage
++    public static void registerForegroundInfoListener(IForegroundInfoListener listener) {
++        transactListener(10, listener);
++    }
++
++    @UnsupportedAppUsage
++    public static void unregisterForegroundInfoListener(IForegroundInfoListener listener) {
++        transactListener(11, listener);
++    }
++
++    private static void transactListener(int code, IForegroundInfoListener listener) {
++        if (listener == null) return;
++        IBinder service = ServiceManager.getService("ProcessManager");
++        if (service == null) throw new IllegalStateException("ProcessManager unavailable");
++        Parcel data = Parcel.obtain();
++        Parcel reply = Parcel.obtain();
++        try {
++            data.writeInterfaceToken("miui.IProcessManager");
++            data.writeStrongInterface(listener);
++            if (!service.transact(code, data, reply, 0)) {
++                throw new IllegalStateException("Foreground listener transaction unsupported");
++            }
++            reply.readException();
++        } catch (RemoteException e) {
++            throw e.rethrowFromSystemServer();
++        } finally {
++            reply.recycle();
++            data.recycle();
++        }
++    }
++}
+diff --git a/services/core/java/com/android/server/wm/ActivityRecord.java b/services/core/java/com/android/server/wm/ActivityRecord.java
+--- a/services/core/java/com/android/server/wm/ActivityRecord.java
++++ b/services/core/java/com/android/server/wm/ActivityRecord.java
+@@ -5729,6 +5729,9 @@
+         return mCurrentLaunchCanTurnScreenOn;
+     }
+ 
++    // True only when this launch needed a new process; consumed on its first resume.
++    boolean mOemForegroundColdStart;
++
+     void setState(State state, String reason) {
+         ProtoLog.v(WM_DEBUG_STATES, "State movement: %s from:%s to:%s reason:%s",
+                 this, mState, state, reason);
+@@ -5741,6 +5744,11 @@
+ 
+         final State prevState = mState;
+         mState = state;
++        if (state == RESUMED) {
++            mAtmService.mOemForegroundInfoController.onActivityResumedLocked(
++                    this, mOemForegroundColdStart && prevState == INITIALIZING);
++            mOemForegroundColdStart = false;
++        }
+ 
+         final TaskFragment taskFragment = getTaskFragment();
+         if (taskFragment != null) {
+diff --git a/services/core/java/com/android/server/wm/ActivityTaskManagerService.java b/services/core/java/com/android/server/wm/ActivityTaskManagerService.java
+--- a/services/core/java/com/android/server/wm/ActivityTaskManagerService.java
++++ b/services/core/java/com/android/server/wm/ActivityTaskManagerService.java
+@@ -884,6 +884,8 @@
+     @VisibleForTesting(visibility = VisibleForTesting.Visibility.PACKAGE)
+     public ActivityTaskManagerService(Context context) {
+         mContext = context;
++        mOemForegroundInfoController = new OemForegroundInfoController(
++                context, com.android.server.FgThread.getHandler());
+         mFactoryTest = FactoryTest.getMode();
+         mSystemThread = ActivityThread.currentActivityThread();
+         mUiContext = mSystemThread.getSystemUiContext();
+@@ -1212,6 +1214,8 @@
+         return mActivityInterceptorCallbacks;
+     }
+ 
++    final OemForegroundInfoController mOemForegroundInfoController;
++
+     private void start() {
+         LocalServices.addService(ActivityTaskManagerInternal.class, mInternal);
+     }
+@@ -1227,6 +1231,7 @@
+         @Override
+         public void onStart() {
+             publishBinderService(Context.ACTIVITY_TASK_SERVICE, mService);
++            publishBinderService("ProcessManager", mService.mOemForegroundInfoController);
+             mService.start();
+         }
+ 
+@@ -5751,6 +5756,7 @@
+ 
+         updateResumedAppTrace(r);
+         mLastResumedActivity = r;
++        mOemForegroundInfoController.onActivityResumedLocked(r, false);
+ 
+         // Don't take focus when transient launching. We don't want the app to know anything
+         // until we've committed to the gesture. The focus will be transferred at the end of
+diff --git a/services/core/java/com/android/server/wm/ActivityTaskSupervisor.java b/services/core/java/com/android/server/wm/ActivityTaskSupervisor.java
+--- a/services/core/java/com/android/server/wm/ActivityTaskSupervisor.java
++++ b/services/core/java/com/android/server/wm/ActivityTaskSupervisor.java
+@@ -1200,6 +1200,7 @@
+ 
+         r.notifyUnknownVisibilityLaunchedForKeyguardTransition();
+ 
++        r.mOemForegroundColdStart = true;
+         final boolean isTop = andResume && r.isTopRunningActivity();
+         mService.startProcessAsync(r, knownToBeDead, isTop,
+                 isTop ? HostingRecord.HOSTING_TYPE_TOP_ACTIVITY
+@@ -2433,6 +2434,7 @@
+     ActivityRecord updateTopResumedActivityIfNeeded(String reason) {
+         final ActivityRecord prevTopActivity = mTopResumedActivity;
+         final Task topRootTask = mRootWindowContainer.getTopDisplayFocusedRootTask();
++        mService.mOemForegroundInfoController.onFocusedActivityChangedLocked(mService);
+         if (topRootTask == null || topRootTask.getTopResumedActivity() == prevTopActivity) {
+             if (topRootTask == null) {
+                 // There's no focused task and there won't have any resumed activity either.
+diff --git a/services/core/java/com/android/server/wm/OemForegroundInfoController.java b/services/core/java/com/android/server/wm/OemForegroundInfoController.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/wm/OemForegroundInfoController.java
+@@ -0,0 +1,165 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.wm;
++
++import android.content.Context;
++import android.content.pm.PackageManager;
++import android.os.Binder;
++import android.os.Handler;
++import android.os.Parcel;
++import android.os.Process;
++import android.os.RemoteCallbackList;
++import android.os.RemoteException;
++import android.util.Slog;
++
++import com.android.internal.annotations.GuardedBy;
++import com.android.internal.annotations.VisibleForTesting;
++
++import java.util.Objects;
++
++import miui.process.ForegroundInfo;
++import miui.process.IForegroundInfoListener;
++
++/** Supplies the official Apps' foreground listener protocol from real WM state. */
++final class OemForegroundInfoController extends Binder {
++    private static final String TAG = "OemForegroundInfo";
++    private static final String DESCRIPTOR = "miui.IProcessManager";
++    private final Context mContext;
++    private final Handler mHandler;
++    // Registration and delivery share this handler. RemoteCallbackList owns Binder death cleanup.
++    private final RemoteCallbackList<IForegroundInfoListener> mListeners =
++            new RemoteCallbackList<>();
++    @GuardedBy("WindowManagerService.mGlobalLock")
++    private ForegroundInfo mLastInfo = new ForegroundInfo();
++
++    OemForegroundInfoController(Context context, Handler handler) {
++        mContext = context;
++        mHandler = handler;
++        attachInterface(null, DESCRIPTOR);
++    }
++
++    @Override
++    public boolean onTransact(int code, Parcel data, Parcel reply, int flags)
++            throws RemoteException {
++        if (code == INTERFACE_TRANSACTION) {
++            if (reply != null) reply.writeString(DESCRIPTOR);
++            return true;
++        }
++        if (code != 10 && code != 11) return super.onTransact(code, data, reply, flags);
++        data.enforceInterface(DESCRIPTOR);
++        if (reply == null) {
++            throw new IllegalArgumentException("Listener registration requires a synchronous call");
++        }
++        enforceCaller();
++        IForegroundInfoListener listener =
++                IForegroundInfoListener.Stub.asInterface(data.readStrongBinder());
++        data.enforceNoDataAvail();
++        if (listener != null) {
++            mHandler.post(() -> {
++                if (code == 10) {
++                    mListeners.register(listener);
++                } else {
++                    mListeners.unregister(listener);
++                }
++            });
++        }
++        reply.writeNoException();
++        return true;
++    }
++
++    private void enforceCaller() {
++        final int uid = Binder.getCallingUid();
++        if (uid == Process.SYSTEM_UID || uid == Process.ROOT_UID) return;
++        PackageManager pm = mContext.getPackageManager();
++        if (pm.checkSignatures(uid, Process.SYSTEM_UID) == PackageManager.SIGNATURE_MATCH) {
++            String[] packages = pm.getPackagesForUid(uid);
++            if (packages != null) {
++                for (String name : packages) {
++                    if ("com.android.camera".equals(name)
++                            || "com.xiaomi.subscreencenter".equals(name)) return;
++                }
++            }
++        }
++        throw new SecurityException("Foreground listener requires an approved platform-signed App");
++    }
++
++    /** Called with the WM lock; never retain ActivityRecord or send callbacks under that lock. */
++    void onActivityResumedLocked(ActivityRecord activity, boolean coldStart) {
++        if (activity == null || activity.app == null || !activity.isAttached()
++                || activity.app.getPid() <= 0
++                || activity.mAtmService.getTransitionController().isTransientCollect(activity)) return;
++        final Task focused = activity.mAtmService.mRootWindowContainer
++                .getTopDisplayFocusedRootTask();
++        final ActivityRecord multiWindow = focused != null
++                ? focused.topRunningActivity() : null;
++        ForegroundInfo next = new ForegroundInfo();
++        next.mForegroundPackageName = activity.packageName;
++        next.mForegroundUid = activity.getUid();
++        next.mForegroundPid = activity.app.getPid();
++        next.mForegroundDisplayId = activity.getDisplayId();
++        // This field is the top focused task's Activity even outside split screen in the OEM.
++        if (multiWindow != null) {
++            next.mMultiWindowForegroundPackageName = multiWindow.packageName;
++            next.mMultiWindowForegroundUid = multiWindow.getUid();
++        }
++        if (coldStart) next.addFlags(ForegroundInfo.FLAG_FOREGROUND_COLD_START);
++        enqueueSnapshotLocked(next);
++    }
++
++    /** Recompute after focus, reparent or task removal; sleep alone is not an empty App event. */
++    void onFocusedActivityChangedLocked(ActivityTaskManagerService service) {
++        if (service.mRootWindowContainer == null) return;
++        Task focused = service.mRootWindowContainer.getTopDisplayFocusedRootTask();
++        ActivityRecord resumed = focused != null ? focused.getTopResumedActivity() : null;
++        onActivityResumedLocked(resumed, false);
++    }
++
++    @VisibleForTesting
++    void enqueueSnapshotLocked(ForegroundInfo next) {
++        if (Objects.equals(next.mForegroundPackageName, mLastInfo.mForegroundPackageName)
++                && next.mForegroundUid == mLastInfo.mForegroundUid
++                && next.mForegroundPid == mLastInfo.mForegroundPid
++                && next.mForegroundDisplayId == mLastInfo.mForegroundDisplayId
++                && Objects.equals(next.mMultiWindowForegroundPackageName,
++                        mLastInfo.mMultiWindowForegroundPackageName)
++                && next.mMultiWindowForegroundUid == mLastInfo.mMultiWindowForegroundUid) return;
++        next.mLastForegroundPackageName = mLastInfo.mForegroundPackageName;
++        next.mLastForegroundUid = mLastInfo.mForegroundUid;
++        next.mLastForegroundPid = mLastInfo.mForegroundPid;
++        next.mLastForegroundDisplayId = mLastInfo.mForegroundDisplayId;
++        mLastInfo = new ForegroundInfo(next);
++        final ForegroundInfo snapshot = new ForegroundInfo(next);
++        mHandler.post(() -> dispatch(snapshot));
++    }
++
++    private void dispatch(ForegroundInfo snapshot) {
++        final int count = mListeners.beginBroadcast();
++        try {
++            for (int i = 0; i < count; i++) {
++                try {
++                    // Isolate local listeners as well as remote Parcel recipients.
++                    mListeners.getBroadcastItem(i).onForegroundInfoChanged(
++                            new ForegroundInfo(snapshot));
++                } catch (RemoteException | RuntimeException e) {
++                    Slog.w(TAG, "Foreground listener failed", e);
++                }
++            }
++        } finally {
++            mListeners.finishBroadcast();
++        }
++    }
++}
+diff --git a/services/core/java/com/android/server/wm/Task.java b/services/core/java/com/android/server/wm/Task.java
+--- a/services/core/java/com/android/server/wm/Task.java
++++ b/services/core/java/com/android/server/wm/Task.java
+@@ -2992,6 +2992,7 @@
+         // Reset in case the Task may be reused by apps.
+         setHasBeenVisible(false);
+         mRemoving = false;
++        mAtmService.mOemForegroundInfoController.onFocusedActivityChangedLocked(mAtmService);
+     }
+ 
+     // TODO: Consolidate this with Task.reparent()
+@@ -3101,6 +3102,9 @@
+             updateSurfaceBounds();
+         }
+         sendTaskFragmentParentInfoChangedIfNeeded();
++        if (lastDisplayId != getDisplayId()) {
++            mAtmService.mOemForegroundInfoController.onFocusedActivityChangedLocked(mAtmService);
++        }
+     }
+ 
+     boolean isResizeable() {
+@@ -4616,6 +4620,7 @@
+         if (parentTask != null) parentTask.dispatchTaskInfoChangedIfNeeded(false /* force */);
+ 
+         mAtmService.getTaskChangeNotificationController().notifyTaskFocusChanged(mTaskId, hasFocus);
++        mAtmService.mOemForegroundInfoController.onFocusedActivityChangedLocked(mAtmService);
+     }
+ 
+     void onPictureInPictureParamsChanged() {

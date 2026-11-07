@@ -1,0 +1,68 @@
+--- /dev/null
++++ b/core/java/android/provider/SystemSettings.java
+@@ -0,0 +1,36 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package android.provider;
++
++import android.content.ContentResolver;
++
++/**
++ * Settings contracts used by the original rear MAML notifier.
++ * @hide
++ */
++public class SystemSettings {
++    /** Original system-setting namespace; reads retain SettingsProvider behavior. */
++    public static class System {
++        public static final String DARKEN_WALLPAPER_UNDER_DARK_MODE =
++                "darken_wallpaper_under_dark_mode";
++
++        public static boolean getBoolean(ContentResolver resolver, String name,
++                boolean defValue) {
++            return Settings.System.getInt(resolver, name, defValue ? 1 : 0) != 0;
++        }
++    }
++}
+--- /dev/null
++++ b/core/java/android/provider/MiuiSettings.java
+@@ -0,0 +1,26 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package android.provider;
++
++/**
++ * Original inherited system-setting API used by rear MAML.
++ * @hide
++ */
++public class MiuiSettings {
++    public static class System extends SystemSettings.System {
++    }
++}

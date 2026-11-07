@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0
+package {
+    default_visibility: ["//frameworks/base/tools/popsicle-turbo"],
+}
+
+filegroup {
+    name: "popsicle-turboadapter-source-apk",
+    srcs: ["inputs/TurboAdapter.apk"],
+}
+
+filegroup {
+    name: "popsicle-dex2jar-input-jars",
+    srcs: ["inputs/dex-tools/lib/*.jar"],
+}

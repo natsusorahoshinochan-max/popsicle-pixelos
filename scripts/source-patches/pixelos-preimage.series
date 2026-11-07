@@ -1,0 +1,6 @@
+# Fixed PixelOS ROM production patch order.
+system/netd 43c893c7f33de178d6edaf5be49aed0794b3a917 pixelos-netd-vpn-recovery.patch
+packages/modules/Connectivity 12221cef10c09c64c8af109a5361e65b13c4c794 pixelos-connectivity-vpn-recovery.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 pixelos-download-api.patch
+packages/providers/DownloadProvider 20f95c184971841ba7c7fa9a74eeb0bb8cd5d8b2 pixelos-download-lifecycle.patch
+hardware/qcom-caf/bootctrl 25092672e644459db328b43fd1c7c57cbff65c91 recovery-readback/bsg-platform-headers.patch

@@ -1,0 +1,5 @@
+service popsicle-ims-adapter /system_ext/bin/popsicle_ims_audio_adapter
+    class core
+    user system
+    group audio
+    interface aidl android.media.audio.IHalAdapterVendorExtension/default

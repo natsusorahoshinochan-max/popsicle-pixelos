@@ -1,0 +1,3412 @@
+diff --git a/Android.bp b/Android.bp
+--- a/Android.bp
++++ b/Android.bp
+@@ -80,6 +80,17 @@
+         "-DHAVE_SYSCONF",
+         "-DEROFS_MT_ENABLED",
+     ],
++    target: {
++        android: {
++            cflags: ["-DHAVE_STRUCT_STAT_ST_ATIM"],
++        },
++        linux_glibc: {
++            cflags: ["-DHAVE_STRUCT_STAT_ST_ATIM"],
++        },
++        linux_musl: {
++            cflags: ["-DHAVE_STRUCT_STAT_ST_ATIM"],
++        },
++    },
+ }
+ 
+ cc_defaults {
+@@ -233,3 +244,83 @@
+     recovery: true,
+     stem: "fsck.erofs",
+ }
++
++// These helpers read and preserve the filesystem itself, not host extraction xattrs.
++license {
++    name: "popsicle_erofs_tools_license",
++    visibility: [":__subpackages__"],
++    license_kinds: ["SPDX-license-identifier-MIT"],
++    license_text: ["popsicle/LICENSE"],
++}
++
++cc_binary_host {
++    name: "popsicle_erofs_readback",
++    licenses: ["popsicle_erofs_tools_license"],
++    defaults: ["erofs-utils_defaults"],
++    srcs: ["popsicle/erofs_readback.c"],
++    static_libs: ["liberofs"],
++    target: {
++        darwin: {
++            enabled: false,
++        },
++    },
++}
++
++python_binary_host {
++    name: "popsicle_derive_vendor",
++    licenses: ["popsicle_erofs_tools_license"],
++    main: "popsicle/derive_vendor.py",
++    srcs: [
++        "popsicle/derive_vendor.py",
++        "popsicle/stage_inputs.py",
++        "popsicle/vendor_avb.py",
++        "popsicle/vendor_target_files.py",
++        "popsicle/vendor_policy.py",
++        "popsicle/policy/*.py",
++    ],
++    libs: [
++        "libavbtool",
++        "releasetools_build_image",
++        "releasetools_verity_utils",
++    ],
++    required: ["avbtool", "avb_openssl", "fec", "secilc", "fs_config", "popsicle_selabel_lookup"],
++}
++
++// Exact same-cohort QSSI producer used to validate the OEM codec variant guard.
++license {
++    name: "popsicle_qssi_policy_producer_license",
++    visibility: ["//system/sepolicy"],
++    license_kinds: ["SPDX-license-identifier-Apache-2.0", "legacy_unencumbered"],
++    license_text: ["popsicle/policy-producers/NOTICE"],
++}
++filegroup {
++    name: "popsicle_qssi_codec_policy_producer",
++    licenses: ["popsicle_qssi_policy_producer_license"],
++    srcs: ["popsicle/policy-producers/mediacodec.te"],
++    visibility: ["//system/sepolicy"],
++}
++
++// Build the exact ODM derivation/signing/target-files tool, with shared strict helpers.
++python_binary_host {
++    name: "popsicle_derive_odm",
++    licenses: ["popsicle_erofs_tools_license"],
++    main: "popsicle/odm_tool.py",
++    srcs: [
++        "popsicle/odm_tool.py",
++        "popsicle/odm_image.py",
++        "popsicle/odm_avb.py",
++        "popsicle/odm_target_files.py",
++        "popsicle/derive_vendor.py",
++        "popsicle/stage_inputs.py",
++        "popsicle/vendor_avb.py",
++        "popsicle/vendor_target_files.py",
++        "popsicle/vendor_policy.py",
++        "popsicle/policy/*.py",
++    ],
++    libs: [
++        "libavbtool",
++        "releasetools_build_image",
++        "releasetools_verity_utils",
++    ],
++    required: ["avbtool", "avb_openssl", "fec", "secilc", "fs_config", "popsicle_selabel_lookup"],
++}
+diff --git a/mkfs/main.c b/mkfs/main.c
+--- a/mkfs/main.c
++++ b/mkfs/main.c
+@@ -796,13 +796,17 @@
+ #ifdef EROFS_MT_ENABLED
+ 		case 520: {
+ 			unsigned int processors;
+-
+-			cfg.c_mt_workers = strtoul(optarg, &endptr, 0);
+-			if (errno || *endptr != '\0') {
++			unsigned long workers;
++
++			errno = 0;
++			workers = strtoul(optarg, &endptr, 0);
++			if (errno || endptr == optarg || *endptr != '\0' ||
++			    optarg[0] == '-' || workers > UINT_MAX) {
+ 				erofs_err("invalid worker number %s", optarg);
+ 				return -EINVAL;
+ 			}
+ 
++			cfg.c_mt_workers = workers;
+ 			processors = erofs_get_available_processors();
+ 			if (cfg.c_mt_workers > processors)
+ 				erofs_warn("%d workers exceed %d processors, potentially impacting performance.",
+diff --git a/lib/tar.c b/lib/tar.c
+--- a/lib/tar.c
++++ b/lib/tar.c
+@@ -399,32 +399,35 @@
+ }
+ 
+ static const char lookup_table[65] =
+-	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+,";
++	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+ 
+ static int base64_decode(const char *src, int len, u8 *dst)
+ {
+-	int i, bits = 0, ac = 0;
++	unsigned int ac = 0;
++	int i, bits = 0;
+ 	const char *p;
+ 	u8 *cp = dst;
+ 
+-	if(!(len % 4)) {
+-		/* Check for and ignore any end padding */
+-		if (src[len - 2] == '=' && src[len - 1] == '=')
+-			len -= 2;
+-		else if (src[len - 1] == '=')
+-			--len;
+-	}
+-
+-	for (i = 0; i < len; i++) {
++	if (len < 0)
++		return -1;
++	if (len && src[len - 1] == '=') {
++		if (len % 4)
++			return -1;
++		len -= 1 + (len >= 2 && src[len - 2] == '=');
++	}
++	if (len % 4 == 1)
++		return -1;
++
++	for (i = 0; i < len; ++i) {
+ 		p = strchr(lookup_table, src[i]);
+-		if (p == NULL || src[i] == 0)
++		if (!p || !src[i])
+ 			return -2;
+-		ac += (p - lookup_table) << bits;
++		ac = (ac << 6) | (p - lookup_table);
+ 		bits += 6;
+ 		if (bits >= 8) {
+-			*cp++ = ac & 0xff;
+-			ac >>= 8;
+ 			bits -= 8;
++			*cp++ = ac >> bits;
++			ac &= (1U << bits) - 1;
+ 		}
+ 	}
+ 	if (ac)
+diff --git a/popsicle/LICENSE b/popsicle/LICENSE
+new file mode 100644
+--- /dev/null
++++ b/popsicle/LICENSE
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2026 Popsicle ROM contributors
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/popsicle/derive_vendor.py b/popsicle/derive_vendor.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/derive_vendor.py
+@@ -0,0 +1,657 @@
++#!/usr/bin/env python3
++# SPDX-License-Identifier: MIT
++"""Add the built tracing descriptor to an independent official EROFS copy.
++
++All existing metadata and content are read back from the images themselves.
++No host extraction tree, mounted xattrs, digest list, or success marker is evidence.
++The output is an unsigned filesystem intermediate, never a flashable AVB image.
++"""
++from __future__ import annotations
++
++import argparse
++import base64
++from collections import defaultdict
++import gzip
++import io
++import json
++import os
++from pathlib import Path
++import shutil
++import stat
++import subprocess
++import tarfile
++import tempfile
++from urllib.parse import quote_from_bytes
++import uuid
++import xml.etree.ElementTree as ET
++
++DESTINATION = b"etc/tracing_descriptors.gz"
++FSTAB = b"etc/fstab.qcom"
++FSTAB_SUFFIX = b",avb_keys=/avb/popsicle-userdebug.avbpubkey"
++LABEL = b"u:object_r:vendor_configs_file:s0"
++AMBIENT = b"bin/mi_ambient"
++AMBIENT_LABEL = b"u:object_r:mi_ambient_exec:s0"
++NOTICE = b"etc/NOTICE.xml.gz"
++
++
++def require(condition: bool, message: str) -> None:
++    if not condition:
++        raise ValueError(message)
++
++
++def merge_notices(oem: bytes, source: bytes) -> bytes:
++    """Retain each source's text and associations, including colliding content IDs."""
++    merged = ET.Element("licenses")
++    for prefix, compressed in (("oem", oem), ("source", source)):
++        try:
++            text = gzip.decompress(compressed).decode("utf-8")
++            require("<!DOCTYPE" not in text.upper() and "<!ENTITY" not in text.upper(),
++                    "NOTICE document declarations are not supported")
++            root = ET.fromstring(text)
++        except (OSError, EOFError, UnicodeError, ET.ParseError) as error:
++            raise ValueError(f"invalid {prefix} gzip/XML NOTICE") from error
++        require(root.tag == "licenses" and not root.attrib and not (root.text or "").strip(),
++                "unknown NOTICE root structure")
++        ids, references = set(), set()
++        for child in root:
++            require(child.tag in {"file-name", "file-content"} and not len(child)
++                    and not (child.tail or "").strip(), "unknown NOTICE entry structure")
++            allowed = {"contentId", "lib"} if child.tag == "file-name" else {"contentId"}
++            require(set(child.attrib) <= allowed and child.attrib.get("contentId")
++                    and child.text and child.text.strip(), "invalid NOTICE entry")
++            content_id = child.attrib["contentId"]
++            if child.tag == "file-content":
++                require(content_id not in ids, "duplicate NOTICE content ID")
++                ids.add(content_id)
++            else:
++                references.add(content_id)
++            # XML parsing decodes the XML layer only. Do not HTML-unescape the
++            # resulting license body: both input generators retain that layer.
++            attributes = dict(child.attrib)
++            attributes["contentId"] = prefix + ":" + content_id
++            ET.SubElement(merged, child.tag, attributes).text = child.text
++        require(references <= ids, "dangling NOTICE content reference")
++    xml = ET.tostring(merged, encoding="utf-8", xml_declaration=True)
++    return gzip.compress(xml, mtime=0)
++
++
++def managed_notice(reader: Path, stock: Path, entries: dict,
++                   source_notice: Path | None) -> bytes | None:
++    if source_notice is None:
++        return None
++    require(NOTICE in entries and stat.S_ISREG(entries[NOTICE]["mode"])
++            and entries[NOTICE]["nlink"] == 1, "NOTICE requires an unaliased original inode")
++    require(source_notice.is_file() and not source_notice.is_symlink(),
++            "source NOTICE must be a regular generated file")
++    original = run([reader, "cat", stock, os.fsdecode(NOTICE)]).stdout
++    return merge_notices(original, source_notice.read_bytes())
++
++
++def environment() -> dict[str, str]:
++    # LD_PRELOAD extraction shims and ambient timestamp overrides are not proof.
++    return {key: value for key, value in os.environ.items()
++            if key not in {"LD_PRELOAD", "LD_LIBRARY_PATH", "SOURCE_DATE_EPOCH",
++                           "TAR_OPTIONS", "EROFS_CONFIGURE"}}
++
++
++def run(command: list[str | Path], **kwargs) -> subprocess.CompletedProcess:
++    return subprocess.run([str(arg) for arg in command], check=True, env=environment(),
++                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
++
++
++def inventory(reader: Path, image: Path) -> dict[bytes, dict]:
++    result = {}
++    for line in run([reader, "inventory", image]).stdout.splitlines():
++        item = json.loads(line)
++        path = bytes.fromhex(item.pop("path_hex"))
++        require(not path or (not path.startswith(b"/") and b"\0" not in path
++                             and all(part not in {b"", b".", b".."}
++                                     for part in path.split(b"/"))), "unsafe image path")
++        require(path not in result, "duplicate image path")
++        pairs = [(bytes.fromhex(key), bytes.fromhex(value)) for key, value in item["xattrs"]]
++        require(len(dict(pairs)) == len(pairs), "duplicate xattr name")
++        item["xattrs"] = dict(pairs)
++        result[path] = item
++    require(b"" in result and stat.S_ISDIR(result[b""]["mode"]), "missing root directory")
++    return result
++
++
++def superblock(reader: Path, image: Path) -> dict:
++    return json.loads(run([reader, "super", image]).stdout)
++
++
++def hardlinks(items: dict[bytes, dict]) -> set[tuple[bytes, ...]]:
++    groups = defaultdict(list)
++    for path, item in items.items():
++        if not stat.S_ISDIR(item["mode"]):
++            groups[item["nid"]].append(path)
++    return {tuple(sorted(paths)) for paths in groups.values()}
++
++
++def descriptor_bytes(path: Path) -> bytes:
++    require(path.is_file(), "descriptor is not a regular file")
++    data = path.read_bytes()
++    # The real tracing_proto_extensions generator and consumer tests establish the
++    # protobuf schema; this gate additionally catches corrupt/truncated gzip input.
++    require(data.startswith(b"\x1f\x8b"), "descriptor is not gzip")
++    gzip.decompress(data)
++    return data
++
++
++def new_metadata(parent: dict, data: bytes) -> dict:
++    return {"mode": stat.S_IFREG | 0o644, "uid": 0, "gid": 0,
++            "size": len(data), "mtime": parent["mtime"], "mtime_nsec": parent["mtime_nsec"],
++            "nlink": 1, "rdev": 0, "xattrs": {b"security.selinux": LABEL}}
++
++
++def managed_fstab(reader: Path, stock: Path, entries: dict, path: Path | None) -> bytes | None:
++    if path is None:
++        return None
++    require(FSTAB in entries and stat.S_ISREG(entries[FSTAB]["mode"])
++            and entries[FSTAB]["nlink"] == 1, "managed fstab must be an unaliased regular inode")
++    original = run([reader, "cat", stock, os.fsdecode(FSTAB)]).stdout
++    require(FSTAB_SUFFIX not in original, "stock already contains the managed AVB key")
++    changed = path.read_bytes()
++    require(changed.count(FSTAB_SUFFIX) == 4
++            and changed.replace(FSTAB_SUFFIX, b"") == original,
++            "fstab change exceeds the four managed vendor/ODM AVB suffixes")
++    kinds = set()
++    for line in changed.splitlines():
++        if FSTAB_SUFFIX not in line:
++            continue
++        fields = line.split()
++        require(len(fields) == 5 and fields[0] in {b"vendor", b"odm"}
++                and fields[1] == b"/" + fields[0]
++                and fields[2] in {b"ext4", b"erofs"}
++                and fields[4].endswith(FSTAB_SUFFIX)
++                and b"avb=vbmeta" in fields[4].split(b","), "invalid managed fstab entry")
++        kinds.add((fields[0], fields[2]))
++    require(kinds == {(partition, kind) for partition in (b"vendor", b"odm")
++                      for kind in (b"ext4", b"erofs")},
++            "managed fstab must cover both vendor/ODM filesystems")
++    return changed
++
++
++
++def managed_ambient_label(reader: Path, stock: Path, entries: dict, enabled: bool) -> dict:
++    if not enabled:
++        return {}
++    contexts = b"etc/selinux/vendor_file_contexts"
++    for path in (AMBIENT, contexts):
++        require(path in entries and stat.S_ISREG(entries[path]["mode"])
++                and entries[path]["nlink"] == 1, "ambient repair requires an unaliased regular inode")
++    original = entries[AMBIENT]
++    require(original["mode"] == stat.S_IFREG | 0o755 and original["uid"] == 0
++            and original["gid"] == 2000, "ambient original entrypoint ownership or mode differs")
++    require(original["xattrs"].get(b"security.selinux") == b"u:object_r:vendor_file:s0",
++            "ambient original label differs")
++    declarations = [line.split() for line in run([reader, "cat", stock, os.fsdecode(contexts)]).stdout.splitlines()
++                    if line.split() and line.split()[0] == b"/(vendor|system/vendor)/bin/mi_ambient"]
++    require(declarations == [[b"/(vendor|system/vendor)/bin/mi_ambient", AMBIENT_LABEL]],
++            "ambient original file_contexts declaration differs")
++    # Replace only the mislabeled entrypoint's SELinux EA. Preserve all bytes,
++    # ownership, mode, times and every other EA from the original image.
++    return {AMBIENT: original | {"xattrs": original["xattrs"] | {b"security.selinux": AMBIENT_LABEL}}}
++
++
++def resolve_stage_inputs(inputs, reader: Path, stock: Path, entries: dict,
++                         descriptor: bytes, fstab: bytes | None,
++                         policy: dict[bytes, bytes], source_notice: Path | None):
++    if inputs is None:
++        return {}, {}
++    managed = {DESTINATION: descriptor, **policy}
++    # The product installs the fstab input into root/recovery. Vendor keeps its
++    # original inode with the checked suffix change even without a Soong stage copy.
++    if fstab is not None and (inputs.stage / os.fsdecode(FSTAB)).exists():
++        managed[FSTAB] = fstab
++    if source_notice is not None:
++        managed[NOTICE] = source_notice.read_bytes()
++    resolution = inputs.resolve(entries,
++                                lambda path: run([reader, "cat", stock, os.fsdecode(path)]).stdout,
++                                managed)
++    return resolution.replacements, resolution.additions
++
++
++def added_parent_metadata(entries: dict, additions: dict) -> dict:
++    changes = {}
++    for path, (metadata, _) in additions.items():
++        parent = path.rpartition(b"/")[0]
++        if parent in entries and stat.S_ISDIR(metadata["mode"]):
++            if parent not in changes:
++                changes[parent] = dict(entries[parent])
++            changes[parent]["nlink"] += 1
++    return changes
++
++
++def verify(reader: Path, fsck: Path, stock: Path, derived: Path, descriptor: Path,
++           fstab: Path | None = None, policy_inputs=None, repair_ambient_label: bool = False,
++           source_notice: Path | None = None, stage_inputs=None) -> dict:
++    require(not os.path.samefile(stock, derived), "derived image aliases stock")
++    # fsck checks all encoded data, even if no file content comparison reaches it.
++    run([fsck, "--extract", stock])
++    run([fsck, "--extract", derived])
++    before = inventory(reader, stock)
++    fstab_data = managed_fstab(reader, stock, before, fstab)
++    policy, policy_report = managed_policy(reader, stock, before, policy_inputs)
++    has_policy = bool(policy)
++    metadata_changes = managed_ambient_label(reader, stock, before, repair_ambient_label)
++    data = descriptor_bytes(descriptor)
++    stage_replacements, additions = resolve_stage_inputs(
++        stage_inputs, reader, stock, before, data, fstab_data, policy, source_notice)
++    require(not set(policy) & set(stage_replacements), "multiple image content providers")
++    policy = policy | stage_replacements
++    metadata_changes = metadata_changes | added_parent_metadata(before, additions)
++    notice = managed_notice(reader, stock, before, source_notice)
++    if notice is not None:
++        policy = policy | {NOTICE: notice}
++    after = inventory(reader, derived)
++    require(DESTINATION not in before, "stock already contains the destination")
++    require(set(after) == set(before) | {DESTINATION} | set(additions), "image path inventory changed")
++    changed_parents = {path.rpartition(b"/")[0] for path in additions} | {b"", b"etc"}
++    for path, original in before.items():
++        expected = metadata_changes.get(path, original)
++        actual = after[path]
++        # Directory encoding size can change when the parent/root is rewritten;
++        # its entries, ownership, mode, xattrs, nlink and timestamp remain checked.
++        fields = set(expected) - {"nid"}
++        if path in changed_parents:
++            fields.discard("size")
++        if (path == FSTAB and fstab_data is not None) or path in policy:
++            fields.discard("size")
++        for field in fields:
++            require(actual[field] == expected[field],
++                    f"original metadata changed: {os.fsdecode(path)!r} {field}")
++    require(hardlinks(before) == hardlinks({path: after[path] for path in before}),
++            "original hardlink equivalence groups changed")
++    require(after[DESTINATION]["nid"] not in {item["nid"] for path, item in after.items()
++                                               if path != DESTINATION},
++            "new descriptor aliases an original inode")
++    for field, value in new_metadata(before[b"etc"], data).items():
++        require(after[DESTINATION][field] == value, f"descriptor metadata differs: {field}")
++    require(run([reader, "cat", derived, os.fsdecode(DESTINATION)]).stdout == data,
++            "descriptor content differs from generated input")
++    new_nids = {after[DESTINATION]["nid"]}
++    old_nids = {after[path]["nid"] for path in before}
++    for path, (expected, content) in additions.items():
++        actual = after[path]
++        require(actual["nid"] not in old_nids | new_nids, "new stage inode aliases another path")
++        new_nids.add(actual["nid"])
++        for field, value in expected.items():
++            if field == "size" and stat.S_ISDIR(expected["mode"]):
++                continue
++            require(actual[field] == value, f"new stage metadata differs: {path!r} {field}")
++        if content is not None:
++            require(run([reader, "cat", derived, os.fsdecode(path)]).stdout == content,
++                    "new stage content differs from selected build output")
++    if fstab_data is not None:
++        require(after[FSTAB]["size"] == len(fstab_data)
++                and run([reader, "cat", derived, os.fsdecode(FSTAB)]).stdout == fstab_data,
++                "derived fstab differs from the validated managed input")
++    for path, expected in policy.items():
++        require(after[path]["size"] == len(expected)
++                and run([reader, "cat", derived, os.fsdecode(path)]).stdout == expected,
++                "derived managed content differs from the proven complete contract")
++    comparison = ("compare-data-managed-update" if fstab_data is not None else "compare-data-policy-update") \
++        if has_policy else ("compare-data-fstab-update" if fstab_data is not None else "compare-data")
++    if stage_inputs is None:
++        run([reader, comparison, stock, derived] + (["--notice"] if notice is not None else []))
++    else:
++        # Every updated path was checked above against its exact expected bytes. Compare all
++        # remaining original file/symlink bytes, without a generic difference exemption list.
++        for path, metadata in before.items():
++            if path in policy or (path == FSTAB and fstab_data is not None):
++                continue
++            if stat.S_IFMT(metadata["mode"]) in {stat.S_IFREG, stat.S_IFLNK}:
++                require(run([reader, "cat", stock, os.fsdecode(path)]).stdout
++                        == run([reader, "cat", derived, os.fsdecode(path)]).stdout,
++                        f"retained OEM content differs: {path!r}")
++    old_super, new_super = superblock(reader, stock), superblock(reader, derived)
++    for key in ("block_size", "uuid", "volume_hex", "feature_compat", "feature_incompat"):
++        require(new_super[key] == old_super[key], f"filesystem property changed: {key}")
++    require(new_super["blocks"] * new_super["block_size"] == derived.stat().st_size,
++            "derived file has an unexpected tail (AVB must be a later explicit build step)")
++    return {"original_paths": len(before),
++            "new_paths": sorted(os.fsdecode(path) for path in {DESTINATION, *additions}),
++            "modified_paths": ([os.fsdecode(FSTAB)] if fstab_data is not None else [])
++                              + sorted(os.fsdecode(path) for path in policy),
++            "modified_metadata_paths": sorted(os.fsdecode(path) for path in metadata_changes),
++            "policy": policy_report,
++            "original_hardlink_groups": sum(len(group) > 1 for group in hardlinks(before)),
++            "derived_filesystem_bytes": derived.stat().st_size,
++            "verification": "raw metadata, hardlink equivalence and complete file byte comparison"}
++
++
++def tar_entry(path: bytes, metadata: dict) -> tarfile.TarInfo:
++    entry = tarfile.TarInfo(os.fsdecode(path) if path else ".")
++    types = {stat.S_IFDIR: tarfile.DIRTYPE, stat.S_IFREG: tarfile.REGTYPE,
++             stat.S_IFLNK: tarfile.SYMTYPE, stat.S_IFCHR: tarfile.CHRTYPE,
++             stat.S_IFBLK: tarfile.BLKTYPE, stat.S_IFIFO: tarfile.FIFOTYPE}
++    kind = stat.S_IFMT(metadata["mode"])
++    require(kind in types, f"unsupported inode type at {os.fsdecode(path)!r}")
++    entry.type = types[kind]
++    entry.mode = stat.S_IMODE(metadata["mode"])
++    entry.uid, entry.gid = metadata["uid"], metadata["gid"]
++    entry.mtime = metadata["mtime"]
++    entry.pax_headers["mtime"] = f'{metadata["mtime"]}.{metadata["mtime_nsec"]:09d}'
++    for key, value in metadata["xattrs"].items():
++        require(quote_from_bytes(key, safe="").encode("ascii") == key,
++                "xattr name needs URL decoding unsupported by fixed erofs-utils 1.8.3")
++        entry.pax_headers["LIBARCHIVE.xattr." + quote_from_bytes(key, safe="")] = (
++            base64.b64encode(value).decode("ascii"))
++    if kind in {stat.S_IFCHR, stat.S_IFBLK}:
++        # EROFS stores Linux new_encode_dev's 12-bit major / 20-bit minor.
++        entry.devmajor = (metadata["rdev"] >> 8) & 0xfff
++        entry.devminor = (metadata["rdev"] & 0xff) | ((metadata["rdev"] >> 12) & 0xfff00)
++    return entry
++
++
++def add_tar_entry(archive: tarfile.TarFile, path: bytes, metadata: dict,
++                  data: bytes | None = None) -> None:
++    entry = tar_entry(path, metadata)
++    entry.size = len(data) if data is not None else 0
++    archive.addfile(entry, io.BytesIO(data) if data is not None else None)
++
++
++def write_source_tar(reader: Path, stock: Path, entries: dict[bytes, dict],
++                     archive_path: Path, descriptor: bytes, fstab: bytes | None = None,
++                     policy: dict[bytes, bytes] | None = None,
++                     metadata_changes: dict[bytes, dict] | None = None,
++                     additions: dict[bytes, tuple[dict, bytes | None]] | None = None) -> None:
++    replacements = dict(policy or {})
++    if fstab is not None:
++        require(FSTAB not in replacements, "fstab has multiple content providers")
++        replacements[FSTAB] = fstab
++    additions = dict(additions or {})
++    require(DESTINATION not in additions, "descriptor has multiple providers")
++    additions[DESTINATION] = (new_metadata(entries[b"etc"], descriptor), descriptor)
++    write_image_tar(reader, stock, entries, archive_path, replacements, metadata_changes, additions)
++
++
++def write_image_tar(reader: Path, stock: Path, entries: dict[bytes, dict],
++                    archive_path: Path, replacements: dict[bytes, bytes],
++                    metadata_changes: dict[bytes, dict] | None = None,
++                    additions: dict[bytes, tuple[dict, bytes | None]] | None = None) -> None:
++    """Stream original inodes, with changes already established by each partition contract."""
++    additions = additions or {}
++    metadata_changes = metadata_changes or {}
++    require(set(replacements) <= set(entries), "replacement has no original inode")
++    require(set(metadata_changes) <= set(entries), "metadata change has no original inode")
++    require(not set(additions) & set(entries), "added path already exists")
++    for path in replacements:
++        require(stat.S_ISREG(entries[path]["mode"]), "content replacement requires a regular inode")
++    for group in hardlinks(entries):
++        if set(group) & replacements.keys():
++            require(set(group) <= replacements.keys()
++                    and len({replacements[path] for path in group}) == 1,
++                    "replacement must preserve complete original hardlink group")
++    for path, (metadata, data) in additions.items():
++        require(path and not path.startswith(b"/") and b"\0" not in path
++                and all(part not in {b"", b".", b".."} for part in path.split(b"/")),
++                "unsafe added image path")
++        parent = path.rpartition(b"/")[0]
++        parent_metadata = additions[parent][0] if parent in additions else entries.get(parent)
++        require(parent_metadata is not None and stat.S_ISDIR(parent_metadata["mode"]),
++                "added path parent is not a directory")
++        require((stat.S_ISREG(metadata["mode"]) and isinstance(data, bytes)
++                 and metadata["size"] == len(data))
++                or (stat.S_ISDIR(metadata["mode"]) and data is None),
++                "added inode must be a regular file or directory with matching content")
++    inodes: dict[int, bytes] = {}
++    with tarfile.open(archive_path, "w", format=tarfile.PAX_FORMAT) as archive:
++        for path, original in sorted(entries.items()):
++            metadata = metadata_changes.get(path, original)
++            entry = tar_entry(path, metadata)
++            kind = stat.S_IFMT(metadata["mode"])
++            if kind != stat.S_IFDIR and metadata["nid"] in inodes:
++                entry.type = tarfile.LNKTYPE
++                entry.linkname = os.fsdecode(inodes[metadata["nid"]])
++                # Hardlinks share the referenced inode metadata. Repeating PAX
++                # xattrs here is unnecessary and can duplicate EAs in a tar reader.
++                entry.pax_headers = {}
++                archive.addfile(entry)
++                continue
++            if kind != stat.S_IFDIR:
++                inodes[metadata["nid"]] = path
++            if path in replacements:
++                add_tar_entry(archive, path, metadata, replacements[path])
++                continue
++            if kind == stat.S_IFREG:
++                entry.size = metadata["size"]
++                command = [str(reader), "cat", str(stock), os.fsdecode(path)]
++                with tempfile.TemporaryFile() as errors, subprocess.Popen(
++                        command, stdout=subprocess.PIPE, stderr=errors,
++                        env=environment()) as process:
++                    try:
++                        archive.addfile(entry, process.stdout)
++                        require(not process.stdout.read(1), "file grew beyond recorded image size")
++                    except BaseException:
++                        process.kill()
++                        raise
++                    finally:
++                        process.stdout.close()
++                    if process.wait():
++                        errors.seek(0)
++                        raise subprocess.CalledProcessError(process.returncode, command,
++                                                            stderr=errors.read())
++            elif kind == stat.S_IFLNK:
++                target = run([reader, "cat", stock, os.fsdecode(path)]).stdout
++                require(len(target) == metadata["size"] and b"\0" not in target,
++                        "invalid image symlink target")
++                entry.linkname = os.fsdecode(target)
++                archive.addfile(entry)
++            else:
++                archive.addfile(entry)
++        for path, (metadata, data) in sorted(additions.items()):
++            add_tar_entry(archive, path, metadata, data)
++
++
++def managed_policy(reader: Path, stock: Path, entries: dict, inputs) -> tuple[dict, dict | None]:
++    if inputs is None:
++        return {}, None
++    if __package__:
++        from . import vendor_policy
++    else:
++        import vendor_policy
++    return vendor_policy.generate(reader, stock, entries, inputs)
++
++
++def derive(reader: Path, mkfs: Path, fsck: Path, stock: Path, descriptor: Path,
++           output: Path, fstab: Path | None = None, policy_inputs=None, repair_ambient_label: bool = False,
++           source_notice: Path | None = None, stage_inputs=None) -> dict:
++    require(stock.is_file(), "stock image is missing")
++    require(not output.exists() and not output.is_symlink(), "output already exists")
++    require(output.resolve() != stock.resolve() and output.resolve() != descriptor.resolve(),
++            "output aliases an input")
++    data = descriptor_bytes(descriptor)
++    run([fsck, "--extract", stock])
++    entries = inventory(reader, stock)
++    fstab_data = managed_fstab(reader, stock, entries, fstab)
++    policy, _ = managed_policy(reader, stock, entries, policy_inputs)
++    metadata_changes = managed_ambient_label(reader, stock, entries, repair_ambient_label)
++    stage_replacements, additions = resolve_stage_inputs(
++        stage_inputs, reader, stock, entries, data, fstab_data, policy, source_notice)
++    require(not set(policy) & set(stage_replacements), "multiple image content providers")
++    policy = policy | stage_replacements
++    metadata_changes = metadata_changes | added_parent_metadata(entries, additions)
++    notice = managed_notice(reader, stock, entries, source_notice)
++    if notice is not None:
++        policy = policy | {NOTICE: notice}
++    require(DESTINATION not in entries, "stock already contains the destination")
++    require(b"etc" in entries and stat.S_ISDIR(entries[b"etc"]["mode"]), "etc is not a directory")
++    meta = superblock(reader, stock)
++    filesystem_size = meta["block_size"] * meta["blocks"]
++    require(0 < filesystem_size <= stock.stat().st_size, "invalid filesystem extent")
++    require(output.parent.is_dir(), "output parent must already exist")
++    data_size = sum(item["size"] for item in entries.values() if stat.S_ISREG(item["mode"]))
++    require(shutil.disk_usage(output.parent).free > 2 * data_size + 128 * 1024 * 1024,
++            "insufficient scratch space for independent image")
++    with tempfile.TemporaryDirectory(prefix=".vendor-erofs-", dir=output.parent) as temporary:
++        workspace = Path(temporary)
++        archive = workspace / "source-with-descriptor.tar"
++        write_source_tar(reader, stock, entries, archive, data, fstab_data, policy, metadata_changes,
++                         additions)
++        candidate = workspace / "vendor.erofs"
++        volume = bytes.fromhex(meta["volume_hex"]).rstrip(b"\0")
++        require(b"\0" not in volume, "noncanonical filesystem volume label")
++        # Build a complete standalone filesystem. This neither imports blob-index
++        # references nor carries the old AVB tree/footer into the new artifact.
++        run([mkfs, "--clean=data", "--tar=f", "-zlz4hc", "--preserve-mtime", "--mkfs-time",
++             f'-b{meta["block_size"]}', f'-T{meta["build_time"]}',
++             f'-U{uuid.UUID(hex=meta["uuid"])}',
++             "-L", os.fsdecode(volume), "--ovlfs-strip=0", "--workers=4", candidate, archive])
++        report = verify(reader, fsck, stock, candidate, descriptor, fstab, policy_inputs,
++                        repair_ambient_label, source_notice, stage_inputs)
++        # link() is atomic and refuses an existing destination, including a race
++        # with another builder. No existing path is replaced, even after failure.
++        os.link(candidate, output)
++        return report
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("command", choices=("derive", "verify", "seal", "verify-avb", "sync-avb-info",
++                                           "export", "verify-target-files", "audit-stage",
++                                           "export-prebuilt", "verify-prebuilt-target-files", "policy"))
++    parser.add_argument("--reader", type=Path, required=True)
++    parser.add_argument("--mkfs", type=Path)
++    for name in ("fsck", "stock", "descriptor", "output", "fstab", "raw", "image-info",
++                 "avbtool", "key", "public-key", "image", "target-files", "target-files-zip", "stage", "fec", "source-notice",
++                 "stage-file-list", "stage-fs-config", "stage-target-out", "stage-selabel-lookup",
++                 "stage-file-contexts"):
++        parser.add_argument("--" + name, type=Path)
++    parser.add_argument("--algorithm")
++    parser.add_argument("--repair-ambient-label", action="store_true")
++    parser.add_argument("--policy-input", action="append", default=[], metavar="NAME=PATH")
++    parser.add_argument("--stage-source", action="append", default=[], metavar="IMAGE_PATH=BUILD_OUTPUT")
++    parser.add_argument("--partition", choices=("odm", "system_dlkm", "vendor_dlkm"))
++    args = parser.parse_args()
++    try:
++        if __package__:
++            from . import vendor_policy
++        else:
++            import vendor_policy
++        policy_inputs = vendor_policy.Inputs.parse(args.policy_input)
++        stage_config = None
++        metadata_args = (args.stage_file_list, args.stage_fs_config, args.stage_target_out,
++                         args.stage_selabel_lookup, args.stage_file_contexts)
++        if any(value is not None for value in metadata_args) or args.stage_source:
++            require(args.command in {"derive", "verify", "audit-stage"}
++                    and args.stage is not None and all(value is not None for value in metadata_args),
++                    "complete stage inputs are required for derive/verify/audit-stage")
++            if __package__:
++                from . import stage_inputs
++            else:
++                import stage_inputs
++            sources = {}
++            for specification in args.stage_source:
++                name, separator, source = specification.partition("=")
++                path = stage_inputs.image_path(os.fsencode(name))
++                require(separator and source and path not in sources, "invalid/duplicate stage source")
++                sources[path] = Path(source)
++            metadata = stage_inputs.AndroidMetadata(args.stage_fs_config, args.stage_target_out,
++                                                    args.stage_selabel_lookup, args.stage_file_contexts)
++            stage_config = stage_inputs.Inputs(args.stage, args.stage_file_list, sources, metadata)
++        elif args.stage is not None and args.command in {"derive", "verify"}:
++            require(False, "stage requires its actual file list and metadata inputs")
++        required = {
++            "policy": ("stock", "output"),
++            "derive": ("mkfs", "fsck", "stock", "descriptor", "output"),
++            "verify": ("fsck", "stock", "descriptor", "output"),
++            "seal": ("stock", "raw", "output", "image_info", "avbtool", "key", "public_key", "algorithm", "fec"),
++            "verify-avb": ("stock", "raw", "image", "key", "public_key", "algorithm", "fec"),
++            "sync-avb-info": ("image", "image_info", "key", "public_key", "fec"),
++            "export": ("image", "target_files"),
++            "verify-target-files": ("image", "key", "public_key", "fec"),
++            "audit-stage": ("stock", "descriptor", "stage"),
++            "export-prebuilt": ("partition", "fsck", "stock", "image", "stage", "target_files"),
++            "verify-prebuilt-target-files": ("partition", "fsck", "stock", "image", "stage"),
++        }
++        require(all(getattr(args, name) is not None for name in required[args.command]),
++                "missing required arguments for " + args.command)
++        require(args.partition is None or args.command in {"export-prebuilt", "verify-prebuilt-target-files"},
++                "partition selection is only valid for unchanged prebuilt commands")
++        require(policy_inputs is None or args.command in {
++                    "policy", "derive", "verify", "audit-stage", "verify-target-files"},
++                "policy inputs are not valid for this command")
++        require(policy_inputs is None or args.command != "verify-target-files" or args.stock is not None,
++                "policy target-files verification requires the original stock image")
++        require(not args.repair_ambient_label or args.command in {"derive", "verify", "audit-stage"},
++                "ambient repair selection is not valid for this command")
++        require(args.source_notice is None or args.command in {"derive", "verify", "audit-stage"},
++                "source NOTICE is not valid for this command")
++        report = {"command": args.command, "verification": "passed"}
++        if args.command == "policy":
++            require(policy_inputs is not None, "policy command requires the complete policy inputs")
++            report = vendor_policy.publish(args.reader, args.stock, policy_inputs, args.output)
++        elif args.command in {"derive", "verify"}:
++            if args.command == "derive":
++                report = derive(args.reader, args.mkfs, args.fsck, args.stock, args.descriptor,
++                                args.output, args.fstab, policy_inputs, args.repair_ambient_label,
++                                args.source_notice, stage_config)
++            else:
++                report = verify(args.reader, args.fsck, args.stock, args.output, args.descriptor,
++                                args.fstab, policy_inputs, args.repair_ambient_label,
++                                args.source_notice, stage_config)
++        elif args.command in {"seal", "verify-avb", "sync-avb-info"}:
++            if __package__:
++                from . import vendor_avb
++            else:
++                import vendor_avb
++            if args.command == "sync-avb-info":
++                vendor_avb.sync_info(args.image, args.image_info, args.key, args.public_key, args.fec)
++            elif args.command == "seal":
++                report = vendor_avb.seal(args.reader, args.stock, args.raw, args.output,
++                                         args.image_info, args.avbtool, args.key, args.public_key, args.algorithm, args.fec)
++            else:
++                report = vendor_avb.verify(args.reader, args.stock, args.raw, args.image, args.key,
++                                           args.public_key, args.algorithm, args.fec)
++        else:
++            if __package__:
++                from . import vendor_target_files
++            else:
++                import vendor_target_files
++            if args.command in {"export-prebuilt", "verify-prebuilt-target-files"}:
++                vendor_target_files.verify_prebuilt_inputs(args.fsck, args.stock, args.image, args.partition)
++                vendor_target_files.audit_prebuilt_stage(args.reader, args.stock, args.stage, args.partition)
++                if args.command == "export-prebuilt":
++                    require(args.target_files_zip is None, "export requires a directory, not a ZIP")
++                    vendor_target_files.export(args.reader, args.stock, args.target_files, args.partition)
++                else:
++                    require(bool(args.target_files) != bool(args.target_files_zip),
++                            "select exactly one target-files directory or ZIP")
++                    if args.target_files:
++                        vendor_target_files.verify_directory(args.reader, args.stock, args.target_files,
++                                                             partition=args.partition)
++                    else:
++                        vendor_target_files.verify_zip(args.reader, args.stock, args.target_files_zip,
++                                                       partition=args.partition)
++            elif args.command == "export":
++                vendor_target_files.export(args.reader, args.image, args.target_files)
++            elif args.command == "audit-stage":
++                managed_ambient_label(args.reader, args.stock, inventory(args.reader, args.stock),
++                                      args.repair_ambient_label)
++                vendor_target_files.audit_stage(args.reader, args.stock, args.stage,
++                                                args.descriptor, args.fstab, policy_inputs,
++                                                args.source_notice, stage_config)
++            else:
++                require(bool(args.target_files) != bool(args.target_files_zip),
++                        "select exactly one target-files directory or ZIP")
++                if args.target_files:
++                    vendor_target_files.verify_directory(args.reader, args.image, args.target_files,
++                                                         key=args.key, public_key=args.public_key, fec=args.fec)
++                else:
++                    vendor_target_files.verify_zip(args.reader, args.image, args.target_files_zip,
++                                                    args.key, args.public_key, args.fec)
++                if policy_inputs is not None:
++                    vendor_policy.verify_target_files(args.reader, args.stock, args.image, policy_inputs,
++                                                       args.target_files, args.target_files_zip)
++        print(json.dumps(report, sort_keys=True))
++    except (ValueError, OSError, EOFError, KeyError, subprocess.CalledProcessError) as error:
++        if isinstance(error, subprocess.CalledProcessError):
++            message = error.stderr.decode("utf-8", "replace").strip()
++            parser.exit(1, f"{error.cmd[0]} failed ({error.returncode}): {message}\n")
++        parser.exit(1, f"{error}\n")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/popsicle/erofs_readback.c b/popsicle/erofs_readback.c
+new file mode 100644
+--- /dev/null
++++ b/popsicle/erofs_readback.c
+@@ -0,0 +1,293 @@
++// SPDX-License-Identifier: MIT
++// Read metadata and bytes directly from EROFS. Never mount or extract the image.
++#define _GNU_SOURCE
++#include <errno.h>
++#include <fcntl.h>
++#include <inttypes.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include "erofs/config.h"
++#include "erofs/dir.h"
++#include "erofs/internal.h"
++#include "erofs/io.h"
++#include "erofs/xattr.h"
++
++struct walk {
++    struct erofs_dir_context ctx;
++    const char *path;
++    unsigned int depth;
++    struct erofs_sb_info *other;
++};
++
++static void die(const char *message, int error)
++{
++    fprintf(stderr, "erofs_readback: %s (%d)\n", message, error);
++    exit(EXIT_FAILURE);
++}
++
++static void *allocate(size_t size)
++{
++    void *p = malloc(size ? size : 1);
++    if (!p) die("out of memory", errno);
++    return p;
++}
++
++static void hex(const void *data, size_t size)
++{
++    const unsigned char *p = data;
++    putchar('"');
++    for (size_t i = 0; i < size; ++i) printf("%02x", p[i]);
++    putchar('"');
++}
++
++static void open_image(struct erofs_sb_info *sbi, const char *path)
++{
++    int err = erofs_dev_open(sbi, path, O_RDONLY);
++    if (err) die("open image", err);
++    err = erofs_read_superblock(sbi);
++    if (err) die("read superblock", err);
++    // A derivative must be independently readable, with no external blob device.
++    if (sbi->extra_devices) die("external device is unsupported", -EINVAL);
++}
++
++static void close_image(struct erofs_sb_info *sbi)
++{
++    erofs_put_super(sbi);
++    erofs_dev_close(sbi);
++}
++
++static unsigned int check_raw_xattr(struct erofs_inode *inode, uint64_t position,
++                                    size_t available, unsigned int *count)
++{
++    struct erofs_xattr_entry entry;
++    if (available < sizeof(entry)) die("truncated raw xattr entry", -EIO);
++    int err = erofs_dev_read(inode->sbi, 0, &entry, position, sizeof(entry));
++    if (err < 0) die("read raw xattr entry", err);
++    unsigned int size = erofs_xattr_entry_size(&entry);
++    if (size > available) die("raw xattr exceeds inode", -EIO);
++    unsigned int index = entry.e_name_index;
++    if (index & EROFS_XATTR_LONG_PREFIX) {
++        unsigned int prefix = index & EROFS_XATTR_LONG_PREFIX_MASK;
++        if (prefix >= inode->sbi->xattr_prefix_count) die("unknown xattr prefix", -EINVAL);
++        index = inode->sbi->xattr_prefixes[prefix].prefix->base_index;
++        if (!index) die("hidden xattr prefix is unsupported", -EINVAL);
++    }
++    if (!index) {
++        // The on-disk padding entry has no name and only zero-valued bytes.
++        // Other index-zero entries are hidden from erofs_listxattr; refusing them
++        // prevents a falsely successful rebuild that silently loses hidden EAs.
++        if (entry.e_name_len) die("hidden xattr is unsupported", -EINVAL);
++        unsigned int value_size = le16_to_cpu(entry.e_value_size);
++        unsigned char *value = allocate(value_size);
++        err = erofs_dev_read(inode->sbi, 0, value, position + sizeof(entry), value_size);
++        if (err < 0) die("read raw xattr padding", err);
++        for (unsigned int i = 0; i < value_size; ++i)
++            if (value[i]) die("nonzero hidden xattr is unsupported", -EINVAL);
++        free(value);
++    } else {
++        if (index > EROFS_XATTR_INDEX_SECURITY || index == EROFS_XATTR_INDEX_LUSTRE)
++            die("unknown xattr namespace", -EINVAL);
++        ++*count;
++    }
++    return size;
++}
++
++static void check_raw_xattrs(struct erofs_inode *inode, unsigned int listed)
++{
++    unsigned int count = 0;
++    if (inode->xattr_isize) {
++        unsigned int offset = sizeof(struct erofs_xattr_ibody_header) +
++                              inode->xattr_shared_count * sizeof(__le32);
++        if (offset > inode->xattr_isize) die("raw xattr array exceeds inode", -EIO);
++        while (offset < inode->xattr_isize)
++            offset += check_raw_xattr(inode, erofs_iloc(inode) + inode->inode_isize + offset,
++                                      inode->xattr_isize - offset, &count);
++        for (unsigned int i = 0; i < inode->xattr_shared_count; ++i)
++            check_raw_xattr(inode, erofs_pos(inode->sbi, inode->sbi->xattr_blkaddr) +
++                            (uint64_t)inode->xattr_shared_xattrs[i] * sizeof(__le32),
++                            sizeof(struct erofs_xattr_entry) + UINT8_MAX + UINT16_MAX + 3,
++                            &count);
++    }
++    if (count != listed) die("raw xattr inventory differs from listed names", -EIO);
++}
++
++static void emit_inode(struct erofs_inode *inode, const char *path)
++{
++    printf("{\"path_hex\":");
++    hex(path, strlen(path));
++    printf(",\"nid\":%" PRIu64 ",\"mode\":%u,\"uid\":%u,\"gid\":%u,"
++           "\"size\":%" PRIu64 ",\"mtime\":%" PRIu64 ",\"mtime_nsec\":%u,"
++           "\"nlink\":%u,\"rdev\":%u,\"xattrs\":[",
++           (uint64_t)inode->nid, inode->i_mode, inode->i_uid, inode->i_gid,
++           (uint64_t)inode->i_size, (uint64_t)inode->i_mtime, inode->i_mtime_nsec,
++           inode->i_nlink, S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode) ?
++           inode->u.i_rdev : 0);
++    int size = erofs_listxattr(inode, NULL, 0);
++    if (size < 0) die("list xattr size", size);
++    char *names = allocate(size);
++    if (erofs_listxattr(inode, names, size) != size) die("list xattrs", -EIO);
++    unsigned int listed = 0;
++    for (int offset = 0; offset < size;) {
++        char *name = names + offset;
++        size_t length = strnlen(name, size - offset);
++        if (!length || length == (size_t)(size - offset)) die("xattr name", -EIO);
++        int value_size = erofs_getxattr(inode, name, NULL, 0);
++        if (value_size < 0) die("get xattr size", value_size);
++        char *value = allocate(value_size);
++        if (erofs_getxattr(inode, name, value, value_size) != value_size)
++            die("get xattr", -EIO);
++        if (offset) putchar(',');
++        putchar('['); hex(name, length); putchar(','); hex(value, value_size); putchar(']');
++        free(value);
++        offset += length + 1;
++        ++listed;
++    }
++    check_raw_xattrs(inode, listed);
++    free(names);
++    puts("]}");
++}
++
++static void compare_content(struct erofs_inode *inode, struct erofs_sb_info *other,
++                            const char *path)
++{
++    struct erofs_inode candidate = { .sbi = other };
++    int err = erofs_ilookup(path[0] ? path : "/", &candidate);
++    if (err) die(path, err);
++    if (candidate.i_mode != inode->i_mode || candidate.i_size != inode->i_size)
++        die(path, -EINVAL);
++    unsigned char a[65536], b[65536];
++    for (uint64_t pos = 0; pos < inode->i_size;) {
++        size_t count = inode->i_size - pos > sizeof(a) ? sizeof(a) : inode->i_size - pos;
++        if ((err = erofs_pread(inode, (char *)a, count, pos)) ||
++            (err = erofs_pread(&candidate, (char *)b, count, pos))) die("read inode data", err);
++        if (memcmp(a, b, count)) die(path, -EILSEQ);
++        pos += count;
++    }
++    free(candidate.xattr_shared_xattrs);
++}
++
++// The Python contract verifies the complete managed fstab and its four exact
++// suffix changes. This narrow data-only command still compares every other file.
++static bool managed_fstab_update;
++static bool managed_policy_update;
++static bool managed_notice_update;
++
++static void visit(struct erofs_inode *inode, const char *path, unsigned int depth,
++                  struct erofs_sb_info *other);
++
++static int visit_child(struct erofs_dir_context *ctx)
++{
++    struct walk *walk = (struct walk *)ctx;
++    if (ctx->dot_dotdot) return 0;
++    if (!ctx->de_namelen || memchr(ctx->dname, '/', ctx->de_namelen) ||
++        memchr(ctx->dname, '\0', ctx->de_namelen)) die("invalid directory name", -EIO);
++    char *path;
++    if (asprintf(&path, "%s%s%.*s", walk->path, walk->path[0] ? "/" : "",
++                 ctx->de_namelen, ctx->dname) < 0) die("path allocation", errno);
++    struct erofs_inode child = { .sbi = ctx->dir->sbi, .nid = ctx->de_nid };
++    int err = erofs_read_inode_from_disk(&child);
++    if (err) die(path, err);
++    visit(&child, path, walk->depth + 1, walk->other);
++    free(child.xattr_shared_xattrs);
++    free(path);
++    return 0;
++}
++
++static void visit(struct erofs_inode *inode, const char *path, unsigned int depth,
++                  struct erofs_sb_info *other)
++{
++    // Fail instead of following corrupt directory cycles indefinitely.
++    if (depth > 256) die("directory nesting exceeds 256", -ELOOP);
++    if (other) {
++        if ((S_ISREG(inode->i_mode) || S_ISLNK(inode->i_mode)) &&
++            !(managed_fstab_update && !strcmp(path, "etc/fstab.qcom")) &&
++            !(managed_notice_update && !strcmp(path, "etc/NOTICE.xml.gz")) &&
++            !(managed_policy_update && (!strcmp(path, "etc/selinux/vendor_sepolicy.cil") ||
++                                        !strcmp(path, "etc/selinux/plat_pub_versioned.cil"))))
++            compare_content(inode, other, path);
++    } else {
++        emit_inode(inode, path);
++    }
++    if (S_ISDIR(inode->i_mode)) {
++        struct walk walk = { .ctx = { .dir = inode, .cb = visit_child },
++                             .path = path, .depth = depth, .other = other };
++        int err = erofs_iterate_dir(&walk.ctx, true);
++        if (err) die("iterate directory", err);
++    }
++}
++
++int main(int argc, char **argv)
++{
++    const bool compare = argc >= 2 &&
++            (!strcmp(argv[1], "compare-data") ||
++             !strcmp(argv[1], "compare-data-fstab-update") ||
++             !strcmp(argv[1], "compare-data-policy-update") ||
++             !strcmp(argv[1], "compare-data-managed-update"));
++    // Python verifies the merged NOTICE against both complete source documents.
++    // No other path or unknown command can select this narrowly scoped mode.
++    if (compare && argc == 5 && !strcmp(argv[4], "--notice")) {
++        managed_notice_update = true;
++        --argc;
++    }
++    if (argc < 3 || ((strcmp(argv[1], "inventory") || argc != 3) &&
++                    (strcmp(argv[1], "super") || argc != 3) &&
++                    (strcmp(argv[1], "compare-data") || argc != 4) &&
++                    (strcmp(argv[1], "compare-data-fstab-update") || argc != 4) &&
++                    (strcmp(argv[1], "compare-data-policy-update") || argc != 4) &&
++                    (strcmp(argv[1], "compare-data-managed-update") || argc != 4) &&
++                    (strcmp(argv[1], "cat") || argc != 4))) {
++        fprintf(stderr, "usage: %s inventory IMAGE | super IMAGE | compare-data OLD NEW | cat IMAGE PATH\n",
++                argv[0]);
++        return EXIT_FAILURE;
++    }
++    erofs_init_configure();
++    cfg.c_dbg_lvl = -1;
++    struct erofs_sb_info source = {0}, other = {0};
++    open_image(&source, argv[2]);
++    struct erofs_inode root = { .sbi = &source, .nid = source.root_nid };
++    int err = erofs_read_inode_from_disk(&root);
++    if (err) die("read root inode", err);
++    if (!strcmp(argv[1], "super")) {
++        printf("{\"block_size\":%u,\"blocks\":%" PRIu64 ",\"build_time\":%" PRIu64 ","
++               "\"feature_compat\":%u,\"feature_incompat\":%u,\"uuid\":",
++               erofs_blksiz(&source), source.primarydevice_blocks,
++               (uint64_t)source.build_time,
++               source.feature_compat, source.feature_incompat);
++        hex(source.uuid, sizeof(source.uuid));
++        printf(",\"volume_hex\":"); hex(source.volume_name, sizeof(source.volume_name));
++        puts("}");
++    } else if (!strcmp(argv[1], "cat")) {
++        struct erofs_inode inode = { .sbi = &source };
++        err = erofs_ilookup(argv[3], &inode);
++        if (err) die("lookup file", err);
++        if (!S_ISREG(inode.i_mode) && !S_ISLNK(inode.i_mode)) die("not a file", -EINVAL);
++        unsigned char buffer[65536];
++        for (uint64_t pos = 0; pos < inode.i_size;) {
++            size_t count = inode.i_size - pos > sizeof(buffer) ? sizeof(buffer) : inode.i_size - pos;
++            if ((err = erofs_pread(&inode, (char *)buffer, count, pos))) die("read file", err);
++            if (fwrite(buffer, 1, count, stdout) != count) die("write data", errno);
++            pos += count;
++        }
++        free(inode.xattr_shared_xattrs);
++    } else if (!strcmp(argv[1], "compare-data") ||
++               !strcmp(argv[1], "compare-data-fstab-update") ||
++               !strcmp(argv[1], "compare-data-policy-update") ||
++               !strcmp(argv[1], "compare-data-managed-update")) {
++        managed_fstab_update = !strcmp(argv[1], "compare-data-fstab-update") ||
++                               !strcmp(argv[1], "compare-data-managed-update");
++        managed_policy_update = !strcmp(argv[1], "compare-data-policy-update") ||
++                                !strcmp(argv[1], "compare-data-managed-update");
++        open_image(&other, argv[3]);
++        visit(&root, "", 0, &other);
++        close_image(&other);
++    } else {
++        visit(&root, "", 0, NULL);
++    }
++    free(root.xattr_shared_xattrs);
++    close_image(&source);
++    erofs_exit_configure();
++    if (fflush(stdout) || ferror(stdout)) die("write output", errno);
++    return EXIT_SUCCESS;
++}
+diff --git a/popsicle/policy-producers/NOTICE b/popsicle/policy-producers/NOTICE
+new file mode 100644
+--- /dev/null
++++ b/popsicle/policy-producers/NOTICE
+@@ -0,0 +1,21 @@
++This configuration (sepolicy) is public domain, i.e. not copyrighted.
++
++Warranty Exclusion
++------------------
++You agree that this software is a
++non-commercially developed program that may contain "bugs" (as that
++term is used in the industry) and that it may not function as intended.
++The software is licensed "as is". NSA makes no, and hereby expressly
++disclaims all, warranties, express, implied, statutory, or otherwise
++with respect to the software, including noninfringement and the implied
++warranties of merchantability and fitness for a particular purpose.
++
++Limitation of Liability
++-----------------------
++In no event will NSA be liable for any damages, including loss of data,
++lost profits, cost of cover, or other special, incidental,
++consequential, direct or indirect damages arising from the software or
++the use thereof, however caused and on any theory of liability. This
++limitation will apply even if NSA has been advised of the possibility
++of such damage. You acknowledge that this is a reasonable allocation of
++risk.
+diff --git a/popsicle/policy-producers/mediacodec.te b/popsicle/policy-producers/mediacodec.te
+new file mode 100644
+--- /dev/null
++++ b/popsicle/policy-producers/mediacodec.te
+@@ -0,0 +1,39 @@
++type mediacodec, domain, mlstrustedsubject;
++type mediacodec_exec, exec_type, vendor_file_type, file_type;
++
++init_daemon_domain(mediacodec)
++
++# can route /dev/binder traffic to /dev/vndbinder
++vndbinder_use(mediacodec)
++
++hal_server_domain(mediacodec, hal_codec2)
++hal_server_domain(mediacodec, hal_omx)
++
++# mediacodec may use an input surface from a different Codec2 or OMX service
++hal_client_domain(mediacodec, hal_codec2)
++hal_client_domain(mediacodec, hal_omx)
++
++hal_client_domain(mediacodec, hal_allocator)
++hal_client_domain(mediacodec, hal_graphics_allocator)
++
++gpu_sphal_use(mediacodec)
++allow mediacodec dmabuf_system_heap_device:chr_file r_file_perms;
++allow mediacodec video_device:chr_file rw_file_perms;
++allow mediacodec video_device:dir search;
++
++crash_dump_fallback(mediacodec)
++
++# get aac_drc_* properties
++get_prop(mediacodec, aac_drc_prop)
++
++get_prop(mediacodec, graphics_config_prop)
++
++# mediacodec should never execute any executable without a domain transition
++neverallow mediacodec { file_type fs_type }:file execute_no_trans;
++
++# Media processing code is inherently risky and thus should have limited
++# permissions and be isolated from the rest of the system and network.
++# Lengthier explanation here:
++# https://android-developers.googleblog.com/2016/05/hardening-media-stack.html
++neverallow mediacodec domain:{ udp_socket rawip_socket } *;
++neverallow mediacodec { domain userdebug_or_eng(`-su') }:tcp_socket *;
+diff --git a/popsicle/policy/__init__.py b/popsicle/policy/__init__.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/policy/__init__.py
+@@ -0,0 +1 @@
++# SPDX-License-Identifier: MIT
+diff --git a/popsicle/policy/adapt_vendor_avf_policy.py b/popsicle/policy/adapt_vendor_avf_policy.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/policy/adapt_vendor_avf_policy.py
+@@ -0,0 +1,75 @@
++#!/usr/bin/env python3
++"""Restore the fixed A17 AVF vendor launcher contract in a separate OEM candidate.
++
++Update four old transition rules to the real *_vendor domains. Add the fixed
++vendor-use macro's process-group cleanup and crashdump-read permissions. All
++existing communication, mappings and neverallow rules remain. The complementary
++platform HAL client macros live in the device product policy and must be built;
++this transform alone is not a complete AVF or strict-policy acceptance result.
++"""
++import argparse
++import json
++from pathlib import Path
++import re
++import subprocess
++
++CALLER = "vendor_avf_qcvm_manager"
++MANAGERS = ("virtualizationmanager", "early_virtmgr")
++ADDITIONS = (
++    f"(allow {CALLER} crosvm_domain (process (sigkill)))\n".encode(),
++    f"(allow {CALLER} virtualizationservice_data_file (file (read getattr)))\n".encode(),
++)
++
++
++def validate_producer(m4: Path, globals_file: Path, macros: Path) -> None:
++    result = subprocess.run([str(m4), "-Dtarget_build_variant=userdebug",
++                             "-Dtarget_full_treble=true", str(globals_file), str(macros), "-"],
++        input=f"virtualizationservice_vendor_use({CALLER})\nearly_virtmgr_vendor_use({CALLER})\n",
++        capture_output=True, text=True, check=True)
++    source = re.sub(r"#[^\n]*", "", result.stdout)
++    statements = [" ".join(statement.split()) for statement in source.split(";")]
++    expected = [f"allow {CALLER} crosvm_domain:process sigkill",
++                f"allow {CALLER} virtualizationservice_data_file:file {{ getattr read }}"]
++    for manager in MANAGERS:
++        expected.extend([f"allow {CALLER} {manager}_vendor:process transition",
++            f"type_transition {CALLER} {manager}_exec:process {manager}_vendor"])
++    if any(statements.count(statement) != 1 for statement in expected):
++        raise ValueError("fixed AVF vendor-use producer contract changed")
++
++
++def adapt(data: bytes) -> tuple[bytes, int]:
++    if not data.endswith(b"\n"):
++        raise ValueError("OEM CIL must end with a newline")
++    lines = data.splitlines(keepends=True)
++    replacements = {}
++    for manager in MANAGERS:
++        allow = f"(allow {CALLER} {manager}_202504 (process (transition)))\n".encode()
++        transition = f"(typetransition {CALLER} {manager}_exec_202504 process {manager})\n".encode()
++        if lines.count(allow) != 1 or lines.count(transition) != 1:
++            raise ValueError(f"unexpected OEM launcher transition: {manager}")
++        replacements[allow] = allow.replace(f"{manager}_202504".encode(), f"{manager}_vendor".encode())
++        replacements[transition] = transition.replace(f"process {manager})".encode(),
++                                                      f"process {manager}_vendor)".encode())
++    if any(rule in lines for rule in ADDITIONS):
++        raise ValueError("AVF supplementary contract already present")
++    return b"".join(replacements.get(line, line) for line in lines) + b"".join(ADDITIONS), 4
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--m4", required=True, type=Path)
++    parser.add_argument("--global-macros", required=True, type=Path)
++    parser.add_argument("--macros", required=True, type=Path)
++    parser.add_argument("source", type=Path)
++    parser.add_argument("output", type=Path)
++    args = parser.parse_args()
++    validate_producer(args.m4, args.global_macros, args.macros)
++    result, count = adapt(args.source.read_bytes())
++    with args.output.open("xb") as output:
++        output.write(result)
++    print(json.dumps({"changed_transition_rules": count, "added_macro_rules": len(ADDITIONS),
++                      "status": "candidate; platform HAL macros, strict and runtime checks required"}))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/popsicle/policy/adapt_vendor_property_policy.py b/popsicle/policy/adapt_vendor_property_policy.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/policy/adapt_vendor_property_policy.py
+@@ -0,0 +1,90 @@
++#!/usr/bin/env python3
++"""Adapt four old public property guards to their actual current providers.
++
++The current platform grants init_dev_config three configuration-property writes
++and vendor_init the 16-KiB property write. Old versioned guards predate those
++providers. Preserve every guard, its target/permission, and shared source sets;
++only four guards receive private source sets excluding the proven new writer.
++No allow rule is added. This changes writer restrictions and is only a candidate.
++"""
++import argparse
++import json
++from pathlib import Path
++import re
++
++
++CONTRACTS = {
++    "apexd_select_prop": ("base_typeattr_233_202504", "init_dev_config",
++                          "popsicle_config_prop_forbidden_writers"),
++    "media_variant_prop": ("base_typeattr_233_202504", "init_dev_config",
++                           "popsicle_config_prop_forbidden_writers"),
++    "telephony_config_prop": ("base_typeattr_233_202504", "init_dev_config",
++                              "popsicle_config_prop_forbidden_writers"),
++    "enable_16k_pages_prop": ("base_typeattr_232_202504", "vendor_init",
++                              "popsicle_16k_prop_forbidden_writers"),
++}
++SOURCE_SETS = (
++    b"(typeattributeset base_typeattr_233_202504 (and (domain) (not (init_202504 vendor_init_202504))))\n",
++    b"(typeattributeset base_typeattr_232_202504 (and (domain) (not (coredomain))))\n",
++)
++
++
++def sole_set(data: bytes, attribute: str, expected: bytes) -> bool:
++    # CIL accepts multiple additive definitions. Inspect every occurrence of the
++    # named set, including noncanonical whitespace and comments between tokens.
++    # Preserve strings while removing line comments from this parsing view only.
++    parsing = re.sub(rb'"(?:\\.|[^"\\])*"|;[^\n]*',
++                     lambda match: b" " if match[0].startswith(b";") else match[0], data)
++    definitions = re.findall(rb"\(\s*typeattributeset\s+" + re.escape(attribute.encode())
++                             + rb"(?=[\s()])", parsing)
++    return len(definitions) == 1 and data.splitlines(keepends=True).count(expected) == 1
++
++
++def adapt(data: bytes, platform: bytes, mapping: bytes) -> tuple[bytes, int]:
++    if not data.endswith(b"\n"):
++        raise ValueError("OEM CIL must end with a newline before new definitions")
++    lines = data.splitlines(keepends=True)
++    platform_lines = platform.splitlines(keepends=True)
++    if any(not sole_set(data, expression.split()[1].decode(), expression)
++           for expression in SOURCE_SETS):
++        raise ValueError("old public property source sets changed")
++    replacements = {}
++    declarations = {}
++    for prop, (source, writer, private) in CONTRACTS.items():
++        if private.encode() in data:
++            raise ValueError("derived property source set already exists")
++        allow = f"(allow {writer} {prop} (property_service (set)))\n".encode()
++        mapped = f"(typeattributeset {prop}_202504 ({prop}))\n".encode()
++        if platform_lines.count(allow) != 1 or not sole_set(mapping, prop + "_202504", mapped):
++            raise ValueError(f"actual provider or 202504 property mapping changed: {prop}")
++        guard = f"(neverallow {source} {prop}_202504 (property_service (set)))\n".encode()
++        if lines.count(guard) != 1:
++            raise ValueError(f"old property guard changed: {prop}")
++        replacements[guard] = guard.replace(source.encode(), private.encode(), 1)
++        declarations[private] = (
++            f"(typeattribute {private})\n"
++            f"(typeattributeset {private} (and ({source}) (not ({writer}))))\n"
++        ).encode()
++    # Definitions can follow their references in CIL. The old shared sets and all
++    # other guards retain their bytes, including restrictions on other properties.
++    result = b"".join(replacements.get(line, line) for line in lines)
++    return result + b"".join(declarations.values()), len(replacements)
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--platform-cil", required=True, type=Path)
++    parser.add_argument("--mapping", required=True, type=Path)
++    parser.add_argument("source", type=Path)
++    parser.add_argument("output", type=Path)
++    args = parser.parse_args()
++    result, count = adapt(args.source.read_bytes(), args.platform_cil.read_bytes(),
++                          args.mapping.read_bytes())
++    with args.output.open("xb") as output:
++        output.write(result)
++    print(json.dumps({"adapted_property_guards": count,
++                      "status": "candidate; full strict and device validation pending"}))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/popsicle/policy/derive_vendor_app_debug_policy.py b/popsicle/policy/derive_vendor_app_debug_policy.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/policy/derive_vendor_app_debug_policy.py
+@@ -0,0 +1,97 @@
++#!/usr/bin/env python3
++"""Derive the fixed OEM app_domain ptrace guards for the actual build variant.
++
++Every neverallow remains intact. Only fifteen private, unshared source-set
++expressions may acquire the llkd exclusion produced by the fixed AOSP macro for
++userdebug/eng. This expands debug watchdog access and is not a strict-policy pass.
++The original firmware is never modified; output creation is exclusive.
++"""
++
++import argparse
++from collections import Counter
++import json
++from pathlib import Path
++import re
++import subprocess
++
++
++APPS = {
++    "278": "vendor_cacertservice_app", "288": "vendor_cs_app",
++    "309": "vendor_embmssl_app", "342": "vendor_imshelper_app",
++    "352": "vendor_poweroffalarm_app", "358": "vendor_qtidataservices_app",
++    "367": "vendor_timeservice_app", "371": "vendor_tzas_app",
++    "451": "vendor_perfdump_app", "455": "vendor_powerservice_app",
++    "472": "vendor_qms_app", "513": "vendor_powermodule_app",
++    "518": "theme", "544": "mslg_app", "571": "cameramind_app",
++}
++MACRO_APP = "popsicle_contract_app"
++
++
++def macro_exclusions(m4: Path, macros: Path, variant: str) -> set[str]:
++    """Read the actual m4 producer, including its user-build suppression markers."""
++    if variant not in {"user", "userdebug", "eng"}:
++        raise ValueError("unknown build variant")
++    result = subprocess.run(
++        [str(m4), "-Dtarget_build_variant=" + variant, str(macros), "-"],
++        input=f"app_domain({MACRO_APP})\n", capture_output=True, text=True, check=True,
++    )
++    policy = re.sub(r"#[^\n]*", "", result.stdout)
++    guards = re.findall(
++        r"neverallow\s*\{([^{}]+)\}\s*" + MACRO_APP + r":process\s+ptrace\s*;",
++        policy,
++    )
++    if len(guards) != 1:
++        raise ValueError("app_domain must produce exactly one ptrace guard")
++    tokens = guards[0].split()
++    expected = {"domain", "-" + MACRO_APP, "-crash_dump", "-runas_app", "-simpleperf"}
++    if variant != "user":
++        expected.add("-llkd")
++    if set(tokens) != expected or len(tokens) != len(expected):
++        raise ValueError("fixed app_domain ptrace contract changed")
++    return {token[1:] for token in tokens if token.startswith("-")}
++
++
++def derive(data: bytes, variant: str) -> tuple[bytes, int]:
++    if variant not in {"user", "userdebug", "eng"}:
++        raise ValueError("unknown build variant")
++    lines = data.splitlines(keepends=True)
++    tokens = Counter(re.findall(rb"[A-Za-z_][A-Za-z_0-9]*", data))
++    replacements = {}
++    for number, app in APPS.items():
++        attribute = f"base_typeattr_{number}_202504"
++        declaration = f"(typeattribute {attribute})\n".encode()
++        expression = (f"(typeattributeset {attribute} (and (domain) (not "
++                      f"(crash_dump_202504 runas_app_202504 simpleperf_202504 {app}))))\n").encode()
++        guard = f"(neverallow {attribute} {app} (process (ptrace)))\n".encode()
++        # Exactly the declaration, set definition and single guard may refer to
++        # this attribute. Never broaden a set also used by another policy rule.
++        if tokens[attribute.encode()] != 3 or any(lines.count(line) != 1 for line in
++                                                (declaration, expression, guard)):
++            raise ValueError(f"unexpected or shared OEM app guard: {app}")
++        if variant != "user":
++            replacements[expression] = expression.replace(b"(not (", b"(not (llkd ", 1)
++    return b"".join(replacements.get(line, line) for line in lines), len(replacements)
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--m4", type=Path, required=True)
++    parser.add_argument("--macros", type=Path, required=True)
++    parser.add_argument("--build-variant", choices=("user", "userdebug", "eng"), required=True)
++    parser.add_argument("source", type=Path)
++    parser.add_argument("output", type=Path)
++    args = parser.parse_args()
++    # Verify both sides of the producer contract, not just the requested variant.
++    macro_exclusions(args.m4, args.macros, "user")
++    macro_exclusions(args.m4, args.macros, "userdebug")
++    if args.build_variant == "eng":
++        macro_exclusions(args.m4, args.macros, "eng")
++    candidate, changed = derive(args.source.read_bytes(), args.build_variant)
++    with args.output.open("xb") as output:
++        output.write(candidate)
++    print(json.dumps({"changed_private_sets": changed, "variant": args.build_variant,
++                      "status": "candidate; full strict and device validation pending"}))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/popsicle/policy/derive_vendor_codec_debug_policy.py b/popsicle/policy/derive_vendor_codec_debug_policy.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/policy/derive_vendor_codec_debug_policy.py
+@@ -0,0 +1,67 @@
++#!/usr/bin/env python3
++"""Preserve the OEM codec network guards while restoring its debug su exception.
++
++The same-version QSSI mediacodec.te is the producer: user forbids all TCP peers,
++userdebug/eng excludes su for Binder-over-TCP debugging. No permission is added;
++all existing neverallow permissions, UDP/raw-IP and execution guards remain.
++Only separate candidate output is permitted. Full strict/runtime checks follow.
++"""
++import argparse
++import json
++from pathlib import Path
++import re
++import subprocess
++
++PEERS = "popsicle_mediacodec_tcp_peers"
++PERMISSIONS = ("ioctl read write create getattr setattr lock relabelfrom relabelto append map "
++               "bind connect listen accept getopt setopt shutdown recvfrom sendto name_bind "
++               "node_bind name_connect")
++GUARD = f"(neverallow mediacodec domain (tcp_socket ({PERMISSIONS})))\n".encode()
++
++
++def validate_producer(m4: Path, macros: Path, codec: Path, variant: str) -> None:
++    if variant not in {"user", "userdebug", "eng"}:
++        raise ValueError("unknown build variant")
++    result = subprocess.run([str(m4), "-Dtarget_build_variant=" + variant,
++                             str(macros), str(codec)], capture_output=True, text=True, check=True)
++    policy = re.sub(r"#[^\n]*", "", result.stdout)
++    guards = re.findall(r"neverallow\s+mediacodec\s*\{([^{}]*)\}:tcp_socket\s*\*\s*;", policy)
++    expected = ["domain"] if variant == "user" else ["domain", "-su"]
++    if len(guards) != 1 or guards[0].split() != expected:
++        raise ValueError("same-version codec network producer contract changed")
++
++
++def derive(data: bytes, variant: str) -> tuple[bytes, int]:
++    if variant not in {"user", "userdebug", "eng"}:
++        raise ValueError("unknown build variant")
++    if data.splitlines(keepends=True).count(GUARD) != 1 or PEERS.encode() in data:
++        raise ValueError("unexpected OEM codec guard or existing derived peer attribute")
++    if variant == "user":
++        return data, 0
++    declaration = (f"(typeattribute {PEERS})\n"
++                   f"(typeattributeset {PEERS} (and (domain) (not (su))))\n").encode()
++    guard = GUARD.replace(b"mediacodec domain ", f"mediacodec {PEERS} ".encode(), 1)
++    return b"".join(declaration + guard if line == GUARD else line
++                    for line in data.splitlines(keepends=True)), 1
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--m4", required=True, type=Path)
++    parser.add_argument("--macros", required=True, type=Path)
++    parser.add_argument("--codec-source", required=True, type=Path)
++    parser.add_argument("--build-variant", choices=("user", "userdebug", "eng"), required=True)
++    parser.add_argument("source", type=Path)
++    parser.add_argument("output", type=Path)
++    args = parser.parse_args()
++    for variant in {"user", "userdebug", args.build_variant}:
++        validate_producer(args.m4, args.macros, args.codec_source, variant)
++    data, changed = derive(args.source.read_bytes(), args.build_variant)
++    with args.output.open("xb") as output:
++        output.write(data)
++    print(json.dumps({"changed_peer_guards": changed, "variant": args.build_variant,
++                      "status": "candidate; full strict and device validation pending"}))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/popsicle/policy/repair_display_config_binder_policy.py b/popsicle/policy/repair_display_config_binder_policy.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/policy/repair_display_config_binder_policy.py
+@@ -0,0 +1,89 @@
++#!/usr/bin/env python3
++"""Repair the fixed OEM display-config Binder process endpoints in a private copy.
++
++The actual composer executable registers the display-config AIDL service in
++hal_graphics_composer_default. Its broader HAL server attribute has four domains
++and is not an equivalent endpoint. Preserve old HIDL discovery and every guard;
++this correction does not establish that the legacy HIDL service is registered.
++"""
++import argparse
++from collections import Counter
++import json
++import re
++from pathlib import Path
++
++SERVICE = "vendor_hal_display_config_hwservice"
++PROVIDER = "hal_graphics_composer_default"
++CLIENTS = {"vendor_hal_citsensorservice_xiaomi_default": 1,
++           "rild": 1, "vendor_hal_displayfeature_xiaomi_default": 2}
++
++
++def expected_rules() -> Counter:
++    result = Counter()
++    for client, count in CLIENTS.items():
++        for rule in (f"(allow {client} {SERVICE} (binder (call transfer)))\n",
++                     f"(allow {SERVICE} {client} (binder (transfer)))\n",
++                     f"(allow {client} {SERVICE} (fd (use)))\n"):
++            result[rule.encode()] = count
++    return result
++
++
++def repair(data: bytes) -> bytes:
++    lines = data.splitlines(keepends=True)
++    expected = expected_rules()
++    actual = Counter(line for line in lines if line in expected)
++    if actual != expected:
++        raise ValueError("fixed OEM display-config client contract changed")
++    # Reject an unrecognized additional process rule instead of partially fixing
++    # a different firmware. Service discovery/registration is deliberately kept.
++    # Parse balanced CIL expressions, including nested permission expressions.
++    # Quoted strings keep embedded semicolons; comments are parse-only omissions.
++    stack = []
++    found = Counter()
++    token_pattern = rb'"(?:\\.|[^"\\])*"|;[^\n]*|[()]|[^\s();"]+'
++    def render(form):
++        return b"(" + b" ".join(render(x) if isinstance(x, list) else x for x in form) + b")"
++    for match in re.finditer(token_pattern, data):
++        token = match.group()
++        if token.startswith(b";"):
++            continue
++        if token == b"(":
++            stack.append([])
++        elif token == b")":
++            if not stack:
++                raise ValueError("unbalanced CIL input")
++            form = stack.pop()
++            if (len(form) >= 4 and form[0] == b"allow"
++                    and SERVICE.encode() in form[1:3]):
++                for permission in form[3:]:
++                    if (isinstance(permission, list) and permission
++                            and permission[0] in (b"binder", b"fd")):
++                        found[render(form) + b"\n"] += 1
++            if stack:
++                stack[-1].append(form)
++        elif stack:
++            stack[-1].append(token)
++        else:
++            raise ValueError("token outside CIL expression")
++    if stack:
++        raise ValueError("unbalanced CIL input")
++    if found != expected:
++        raise ValueError("unknown display-config process rule")
++    return b"".join(line.replace(SERVICE.encode(), PROVIDER.encode())
++                    if line in expected else line for line in lines)
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("source", type=Path)
++    parser.add_argument("output", type=Path)
++    args = parser.parse_args()
++    result = repair(args.source.read_bytes())
++    with args.output.open("xb") as output:
++        output.write(result)
++    print(json.dumps({"changed_rules": 12, "provider": PROVIDER,
++                      "status": "candidate; strict and real client validation required"}))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/popsicle/policy/repair_vendor_binder_policy.py b/popsicle/policy/repair_vendor_binder_policy.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/policy/repair_vendor_binder_policy.py
+@@ -0,0 +1,76 @@
++#!/usr/bin/env python3
++"""Repair two proven service-label/process-domain mixups in the fixed OEM CIL.
++
++This creates a separate candidate, never edits the firmware input. It does not
++remove assertions or grant a service label domain membership. Full strict policy
++compilation and device validation remain separate, mandatory checks.
++"""
++
++import argparse
++from collections import Counter
++import json
++from pathlib import Path
++import re
++
++
++SERVERS = {
++    "hal_mediaeventgatherservice_service": "hal_mediaeventgatherservice_default",
++    "hal_visdisplaysrv_service": "hal_visdisplaysrv_default",
++}
++EXPECTED = Counter({
++    ("hal_mediaeventgatherservice_service", "binder"): 52,
++    ("hal_mediaeventgatherservice_service", "fd"): 26,
++    ("hal_visdisplaysrv_service", "binder"): 2,
++})
++ALLOW = re.compile(rb"\(allow (\S+) (\S+) \((binder|fd) \(([^()]*)\)\)\)")
++
++
++def rewrite_rule(line: bytes) -> tuple[bytes, tuple[str, str] | None]:
++    """Change only process endpoints; retain permissions and all other bytes."""
++    body = line.removesuffix(b"\n")
++    match = ALLOW.fullmatch(body)
++    if match is None:
++        return line, None
++    source, target, kind, _ = match.groups()
++    replacements = [key for key in SERVERS if key.encode() in (source, target)]
++    if not replacements:
++        return line, None
++    if len(replacements) != 1 or source == target:
++        raise ValueError("unexpected service-to-service process rule")
++    key = replacements[0]
++    start, end = match.span(1 if source == key.encode() else 2)
++    return line[:start] + SERVERS[key].encode() + line[end:], (key, kind.decode())
++
++
++def repair(data: bytes) -> tuple[bytes, Counter]:
++    for service, server in SERVERS.items():
++        declaration = f"(typeattributeset {service.removesuffix('_service')}_server ({server}))\n"
++        if data.count(declaration.encode()) != 1:
++            raise ValueError(f"unexpected OEM server declaration for {service}")
++    counts = Counter()
++    result = []
++    for line in data.splitlines(keepends=True):
++        changed, key = rewrite_rule(line)
++        result.append(changed)
++        if key is not None:
++            counts[key] += 1
++    if counts != EXPECTED:
++        raise ValueError(f"unexpected fixed-OEM process rule counts: {dict(counts)}")
++    return b"".join(result), counts
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("source", type=Path)
++    parser.add_argument("output", type=Path)
++    args = parser.parse_args()
++    candidate, counts = repair(args.source.read_bytes())
++    # Exclusive creation rejects existing outputs, aliases and dangling symlinks.
++    with args.output.open("xb") as output:
++        output.write(candidate)
++    print(json.dumps({"changed_rules": sum(counts.values()),
++                      "status": "candidate; strict compilation and runtime validation pending"}))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/popsicle/vendor_avb.py b/popsicle/vendor_avb.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/vendor_avb.py
+@@ -0,0 +1,337 @@
++# SPDX-License-Identifier: MIT
++"""Seal the verified filesystem using current signing inputs and OEM vendor properties."""
++from __future__ import annotations
++
++import contextlib
++import io
++import os
++from pathlib import Path
++import shlex
++import shutil
++import struct
++import tempfile
++
++import avbtool
++import build_image
++import verity_utils
++
++if __package__:
++    from . import derive_vendor as image
++else:
++    import derive_vendor as image
++
++COHORT = {
++    "com.android.build.vendor.os_version": b"ro.vendor.build.version.release",
++    "com.android.build.vendor.fingerprint": b"ro.vendor.build.fingerprint",
++    "com.android.build.vendor.security_patch": b"ro.vendor.build.security_patch",
++}
++ODM_COHORT = {
++    "com.android.build.odm.os_version": b"ro.odm.build.version.release",
++    "com.android.build.odm.fingerprint": b"ro.odm.build.fingerprint",
++}
++
++
++def require_partition_contract(partition: str, cohort: dict[str, bytes]) -> None:
++    # These two retained firmware cohorts have distinct, fixed property sets.
++    # In particular, the OEM ODM has no security-patch property to invent.
++    expected = {"vendor": COHORT, "odm": ODM_COHORT}
++    image.require(partition in expected and cohort == expected[partition],
++                  "unsupported partition/cohort contract")
++
++
++
++def target_files_properties(sealed: Path, *, partition: str = "vendor", cohort: dict[str, bytes] = COHORT) -> dict[str, str]:
++    require_partition_contract(partition, cohort)
++    _, header, tree, props, size = parse(sealed, partition=partition, cohort=cohort)
++    arguments = ["--hash_algorithm", tree.hash_algorithm, "--block_size", str(tree.data_block_size),
++                 "--fec_num_roots", str(tree.fec_num_roots),
++                 "--rollback_index", str(header.rollback_index),
++                 "--rollback_index_location", str(header.rollback_index_location)]
++    for key, value in sorted(props.items()):
++        arguments += ["--prop", key + ":" + value.decode()]
++    return {f"avb_{partition}_add_hashtree_footer_args": shlex.join(arguments),
++            f"avb_{partition}_salt": tree.salt.hex(), f"{partition}_size": str(size),
++            f"avb_{partition}_algorithm": avbtool.lookup_algorithm_by_type(header.algorithm_type)[0]}
++
++
++def parse_info(data: bytes) -> dict[str, str]:
++    result = {}
++    for line in data.decode().splitlines():
++        if line and not line.startswith("#"):
++            name, value = line.split("=", 1)
++            image.require(name not in result, "duplicate target-files image property")
++            result[name] = value
++    return result
++
++
++def verify_info(sealed: Path, data: bytes, key: Path, public_key: Path, fec: Path,
++                *, partition: str = "vendor", cohort: dict[str, bytes] = COHORT) -> None:
++    require_partition_contract(partition, cohort)
++    values = parse_info(data)
++    image.require(values.get("avb_enable") == "true"
++                  and values.get(f"avb_{partition}_hashtree_enable") == "true"
++                  and values.get(f"{partition}_fs_type") == "erofs"
++                  and bool(values.get(f"avb_{partition}_key_path")), "target-files vendor AVB setup differs")
++    image.require(os.path.samefile(values[f"avb_{partition}_key_path"], key),
++                  "target-files vendor signing key path differs")
++    verify_signature(sealed, key, public_key, partition=partition, cohort=cohort)
++    verify_fec(sealed, fec, partition=partition, cohort=cohort)
++    for name, value in target_files_properties(sealed, partition=partition, cohort=cohort).items():
++        image.require(values.get(name) == value, f"target-files vendor AVB property differs: {name}")
++
++
++def sync_info(sealed: Path, path: Path, key: Path, public_key: Path, fec: Path,
++              *, partition: str = "vendor", cohort: dict[str, bytes] = COHORT) -> None:
++    require_partition_contract(partition, cohort)
++    image.require(path.is_file() and not path.is_symlink() and not os.path.samefile(path, sealed),
++                  "misc_info must be a separate existing regular file")
++    source = path.read_bytes()
++    existing = parse_info(source)
++    updates = target_files_properties(sealed, partition=partition, cohort=cohort)
++    # Standard Board AVB_VENDOR_KEY_PATH would request a top-level chain
++    # descriptor. The managed independent key enters only this vendor's build/TF
++    # properties. Refuse an existing different path instead of silently fixing it.
++    if f"avb_{partition}_key_path" in existing:
++        image.require(os.path.samefile(existing[f"avb_{partition}_key_path"], key),
++                      "target-files vendor signing key path differs")
++    updates[f"avb_{partition}_key_path"] = str(key)
++    # Only this partition's image-derived AVB properties change. The remaining
++    # global/partition build metadata stays byte-for-byte in its original lines.
++    lines = [line for line in source.decode().splitlines(keepends=True)
++             if line.split("=", 1)[0] not in updates]
++    if lines and not lines[-1].endswith("\n"):
++        lines[-1] += "\n"
++    contents = "".join(lines) + "".join(key + "=" + value + "\n" for key, value in updates.items())
++    verify_info(sealed, contents.encode(), key, public_key, fec, partition=partition, cohort=cohort)
++    with tempfile.NamedTemporaryFile(prefix=f".{partition}-misc-", dir=path.parent, delete=False) as output:
++        candidate = Path(output.name)
++        try:
++            output.write(contents.encode())
++            output.close()
++            candidate.chmod(path.stat().st_mode & 0o777)
++            os.replace(candidate, path)
++        finally:
++            candidate.unlink(missing_ok=True)
++
++
++def parse(path: Path, *, partition: str = "vendor", cohort: dict[str, bytes] = COHORT):
++    require_partition_contract(partition, cohort)
++    handle = avbtool.ImageHandler(str(path), read_only=True)
++    try:
++        image.require(not handle.is_sparse, "vendor AVB input must be a raw image")
++        footer, header, descriptors, size = avbtool.Avb()._parse_image(handle)
++        image.require(footer is not None and footer.original_image_size > 0,
++                      "vendor AVB footer is missing")
++        image.require(header.flags == 0, "AVB verification/hashtree flags must remain enabled")
++        image.require(footer.original_image_size <= footer.vbmeta_offset
++                      and footer.vbmeta_size >= header.SIZE
++                      and footer.vbmeta_offset + footer.vbmeta_size <= size - footer.SIZE,
++                      "invalid vendor AVB extents")
++        trees = [d for d in descriptors if isinstance(d, avbtool.AvbHashtreeDescriptor)]
++        props = [d for d in descriptors if isinstance(d, avbtool.AvbPropertyDescriptor)]
++        image.require(len(trees) == 1 and len(trees) + len(props) == len(descriptors),
++                      "unexpected vendor AVB descriptor types/count")
++        tree = trees[0]
++        image.require(tree.partition_name == partition and tree.flags == 0
++                      and tree.image_size == footer.original_image_size
++                      and tree.tree_offset == tree.image_size and tree.tree_size > 0,
++                      "invalid vendor hashtree contract")
++        values = {d.key: d.value for d in props}
++        image.require(len(values) == len(props) and set(cohort) <= set(values),
++                      "vendor AVB properties are missing or duplicated")
++        return footer, header, tree, values, size
++    finally:
++        handle._image.close()
++
++
++def verify_signature(path: Path, key: Path | None, expected_public_key: Path | None,
++                     *, partition: str = "vendor", cohort: dict[str, bytes] = COHORT) -> None:
++    require_partition_contract(partition, cohort)
++    # avbtool resolves descriptor files by partition name. A canonical basename
++    # prevents a correct neighbour from masking corruption of another input.
++    image.require(path.name == partition + ".img", f"AVB verification requires canonical {partition}.img")
++    expected = expected_public_key.read_bytes() if expected_public_key is not None else None
++    image.require(expected_public_key is None or bool(expected), "empty expected AVB public key")
++    with contextlib.redirect_stdout(io.StringIO()):
++        avbtool.Avb().verify_image(str(path), str(key) if key else None, None, False, False, expected)
++
++
++def verify_fec(path: Path, fec: Path, *, partition: str = "vendor", cohort: dict[str, bytes] = COHORT) -> None:
++    require_partition_contract(partition, cohort)
++    footer, _, tree, _, _ = parse(path, partition=partition, cohort=cohort)
++    image.require(tree.fec_num_roots > 0 and tree.fec_size > 0
++                  and tree.fec_offset == tree.tree_offset + tree.tree_size
++                  and tree.fec_offset + tree.fec_size <= footer.vbmeta_offset,
++                  "invalid vendor FEC extents")
++    image.require(shutil.disk_usage(path.parent).free > tree.fec_offset + tree.fec_size + 32 * 1024**2,
++                  "insufficient scratch space for independent FEC verification")
++    with tempfile.TemporaryDirectory(prefix=f".{partition}-fec-", dir=path.parent) as temporary:
++        prefix = Path(temporary) / "filesystem-and-hashtree.img"
++        encoded = Path(temporary) / "fec.bin"
++        with path.open("rb") as source, prefix.open("xb") as output:
++            remaining = tree.fec_offset
++            while remaining:
++                block = source.read(min(remaining, 1024 * 1024))
++                image.require(bool(block), "truncated image before FEC")
++                output.write(block)
++                remaining -= len(block)
++        # avbtool's verifier deliberately skips FEC. Re-encode only the exact
++        # protected prefix with the built fec tool, never the original image.
++        image.run([fec, "--encode", "--roots", str(tree.fec_num_roots), prefix, encoded])
++        header_size = struct.calcsize(avbtool.FEC_FOOTER_FORMAT)
++        with encoded.open("rb") as expected, path.open("rb") as actual:
++            image.require(encoded.stat().st_size >= tree.fec_size + header_size,
++                          "truncated independently generated FEC output")
++            expected.seek(-header_size, os.SEEK_END)
++            magic, version, size, roots, fec_size, input_size, _ = struct.unpack(
++                avbtool.FEC_FOOTER_FORMAT, expected.read(header_size))
++            image.require(magic == avbtool.FEC_MAGIC and version == 0 and size == header_size
++                          and roots == tree.fec_num_roots and fec_size == tree.fec_size
++                          and input_size == tree.fec_offset, "generated FEC header differs")
++            expected.seek(0)
++            actual.seek(tree.fec_offset)
++            remaining = tree.fec_size
++            while remaining:
++                count = min(remaining, 1024 * 1024)
++                block = expected.read(count)
++                image.require(len(block) == count and actual.read(count) == block,
++                              "vendor FEC bytes differ from independent encoding")
++                remaining -= count
++
++
++def original_properties(reader: Path, stock: Path,
++                        *, partition: str = "vendor", cohort: dict[str, bytes] = COHORT) -> tuple:
++    require_partition_contract(partition, cohort)
++    parsed = parse(stock, partition=partition, cohort=cohort)
++    verify_signature(stock, None, None, partition=partition, cohort=cohort)
++    source = image.run([reader, "cat", stock, "build.prop" if partition == "vendor" else "etc/build.prop"]).stdout
++    props = {}
++    for line in source.splitlines():
++        if b"=" in line and not line.lstrip().startswith(b"#"):
++            key, value = line.split(b"=", 1)
++            # OEM build.prop legitimately repeats unrelated, equal-valued
++            # properties. This parser interprets only the three AVB cohort keys;
++            # the complete file, including every repeated line, stays unchanged.
++            if key in cohort.values():
++                image.require(key not in props, "duplicate OEM cohort property")
++                props[key] = value
++    for avb_key, prop_key in cohort.items():
++        image.require(props.get(prop_key) == parsed[3][avb_key],
++                      f"OEM build.prop disagrees with AVB property {avb_key}")
++    return parsed
++
++
++def signing_properties(info: Path, avb: Path, key: Path, algorithm: str,
++                       original: tuple, *, partition: str = "vendor", cohort: dict[str, bytes] = COHORT) -> dict:
++    require_partition_contract(partition, cohort)
++    values = {}
++    for line in info.read_text().splitlines():
++        if line and not line.startswith("#"):
++            name, value = line.split("=", 1)
++            image.require(name not in values, "duplicate image property")
++            values[name] = value
++    props = build_image.ImagePropFromGlobalDict(values, partition)
++    image.require(props.get("avb_enable") == "true"
++                  and props.get("avb_hashtree_enable") == "true"
++                  and props.get("fs_type") == "erofs", "derived vendor requires EROFS and AVB")
++    image.require(props.get("avb_algorithm") == algorithm and algorithm != "NONE"
++                  and props.get("avb_key_path") and os.path.samefile(props["avb_key_path"], key),
++                  "image properties do not match the expected vendor signing key/algorithm")
++    configured_avb = props.get("avb_avbtool")
++    resolved_avb = shutil.which(configured_avb) if configured_avb else None
++    image.require(resolved_avb is not None and os.path.samefile(resolved_avb, avb),
++                  "image properties refer to another avbtool")
++    props["avb_avbtool"] = str(avb.resolve(strict=True))
++    footer, header, tree, original_cohort, _ = original
++    words = shlex.split(props.get("avb_add_hashtree_footer_args", ""))
++    forwarded = []
++    seen_props = set()
++    options = {"--hash_algorithm": tree.hash_algorithm,
++               "--block_size": str(tree.data_block_size),
++               "--fec_num_roots": str(tree.fec_num_roots),
++               "--rollback_index": str(header.rollback_index),
++               "--rollback_index_location": str(header.rollback_index_location)}
++    seen_options = set()
++    while words:
++        option = words.pop(0)
++        image.require(bool(words), "footer option lacks a value")
++        value = words.pop(0)
++        if option == "--prop":
++            name, text = value.split(":", 1)
++            image.require(name in original_cohort and name not in seen_props, "unapproved footer property")
++            seen_props.add(name)
++            # Make unconditionally supplies the framework fingerprint. This
++            # explicitly managed OEM vendor preserves its own original cohort.
++            if name != f"com.android.build.{partition}.fingerprint":
++                image.require(text.encode() == original_cohort[name], "vendor cohort property changed")
++        else:
++            image.require(option in options and option not in seen_options
++                          and value == options[option], "unsupported or changed footer option")
++            seen_options.add(option)
++    image.require(tree.data_block_size == tree.hash_block_size and tree.fec_num_roots > 0,
++                  "unsupported original vendor hashtree layout")
++    for name, value in options.items():
++        forwarded += [name, value]
++    for name, value in sorted(original_cohort.items()):
++        forwarded += ["--prop", name + ":" + value.decode("utf-8")]
++    props["avb_add_hashtree_footer_args"] = shlex.join(forwarded)
++    props["avb_salt"] = tree.salt.hex()
++    return props
++
++
++def verify(reader: Path, stock: Path, raw: Path, sealed: Path, key: Path,
++           public_key: Path, algorithm: str, fec: Path,
++           *, partition: str = "vendor", cohort: dict[str, bytes] = COHORT) -> dict:
++    require_partition_contract(partition, cohort)
++    original = original_properties(reader, stock, partition=partition, cohort=cohort)
++    footer, header, tree, props, size = parse(sealed, partition=partition, cohort=cohort)
++    image.require(avbtool.lookup_algorithm_by_type(header.algorithm_type)[0] == algorithm
++                  and algorithm != "NONE", "vendor signature algorithm differs")
++    verify_signature(sealed, key, public_key, partition=partition, cohort=cohort)
++    verify_fec(sealed, fec, partition=partition, cohort=cohort)
++    image.require(props == original[3], "vendor AVB properties differ from OEM cohort")
++    for name in ("rollback_index", "rollback_index_location", "flags"):
++        image.require(getattr(header, name) == getattr(original[1], name),
++                      "vendor AVB rollback/flags changed")
++    for name in ("dm_verity_version", "hash_algorithm", "data_block_size", "hash_block_size",
++                 "fec_num_roots", "flags", "salt"):
++        image.require(getattr(tree, name) == getattr(original[2], name),
++                      f"vendor hashtree property changed: {name}")
++    image.require(footer.original_image_size == raw.stat().st_size,
++                  "sealed filesystem extent differs from verified raw image")
++    meta = image.superblock(reader, raw)
++    image.require(meta["blocks"] * meta["block_size"] == raw.stat().st_size,
++                  "raw intermediate contains non-filesystem tail")
++    with raw.open("rb") as expected, sealed.open("rb") as actual:
++        while block := expected.read(1024 * 1024):
++            image.require(actual.read(len(block)) == block, "AVB step changed filesystem bytes")
++    return {"filesystem_bytes": raw.stat().st_size, "partition_bytes": size,
++            "algorithm": algorithm, "expected_public_key_verified": True,
++            "fec_verified": "independent encoding and complete FEC byte comparison",
++            partition + "_properties": {k: v.decode() for k, v in props.items()}}
++
++
++def seal(reader: Path, stock: Path, raw: Path, output: Path, info: Path,
++         avb: Path, key: Path, public_key: Path, algorithm: str, fec: Path,
++         *, partition: str = "vendor", cohort: dict[str, bytes] = COHORT) -> dict:
++    require_partition_contract(partition, cohort)
++    image.require(not output.exists() and not output.is_symlink(), "AVB output already exists")
++    image.require(output.parent.is_dir(), "AVB output parent must exist")
++    original = original_properties(reader, stock, partition=partition, cohort=cohort)
++    props = signing_properties(info, avb, key, algorithm, original, partition=partition, cohort=cohort)
++    builder = verity_utils.CreateVerityImageBuilder(props)
++    image.require(builder is not None, "AVB builder is missing")
++    if not props.get("partition_size"):
++        image.require(props.get("use_dynamic_partition_size") == "true",
++                      "vendor partition size is neither fixed nor dynamic")
++        builder.CalculateDynamicPartitionSize(raw.stat().st_size)
++    image.require(builder.CalculateMaxImageSize() >= raw.stat().st_size,
++                  "vendor filesystem exceeds its partition capacity")
++    with tempfile.TemporaryDirectory(prefix=f".{partition}-avb-", dir=output.parent) as temporary:
++        candidate = Path(temporary) / (partition + ".img")
++        shutil.copyfile(raw, candidate)
++        builder.Build(str(candidate))
++        report = verify(reader, stock, raw, candidate, key, public_key, algorithm, fec,
++                        partition=partition, cohort=cohort)
++        os.link(candidate, output)
++        return report
+diff --git a/popsicle/vendor_policy.py b/popsicle/vendor_policy.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/vendor_policy.py
+@@ -0,0 +1,305 @@
++# SPDX-License-Identifier: MIT
++"""Derive only the reviewed OEM policy contracts, then compile the complete policy.
++
++No CIL replacement input, success marker, or precompiled policy is accepted as
++evidence. Both modified files are regenerated from the supplied raw stock image.
++"""
++from __future__ import annotations
++
++from collections import Counter
++from dataclasses import dataclass
++import os
++from pathlib import Path
++import re
++import stat
++import tempfile
++import zipfile
++
++if __package__:
++    from . import derive_vendor as image
++    from .policy import (repair_vendor_binder_policy as binder,
++                         derive_vendor_app_debug_policy as app,
++                         derive_vendor_codec_debug_policy as codec,
++                         adapt_vendor_property_policy as prop,
++                         adapt_vendor_avf_policy as avf,
++                         repair_display_config_binder_policy as display)
++else:
++    import derive_vendor as image
++    from policy import (repair_vendor_binder_policy as binder,
++                        derive_vendor_app_debug_policy as app,
++                        derive_vendor_codec_debug_policy as codec,
++                        adapt_vendor_property_policy as prop,
++                        adapt_vendor_avf_policy as avf,
++                        repair_display_config_binder_policy as display)
++
++VENDOR_CIL = b"etc/selinux/vendor_sepolicy.cil"
++PUBLIC_CIL = b"etc/selinux/plat_pub_versioned.cil"
++ODM_CIL = b"etc/selinux/odm_sepolicy.cil"
++POLICY_PATHS = frozenset((VENDOR_CIL, PUBLIC_CIL))
++# These are the actual files selected by fixed init/selinux.cpp for this OEM's
++# plat_sepolicy_vers=202504 and genfs_labels_version=202504.
++PLATFORM_PATHS = {
++    "plat": ("SYSTEM", "etc/selinux/plat_sepolicy.cil"),
++    "plat-map": ("SYSTEM", "etc/selinux/mapping/202504.cil"),
++    "plat-compat": ("SYSTEM", "etc/selinux/mapping/202504.compat.cil"),
++    "system-ext": ("SYSTEM_EXT", "etc/selinux/system_ext_sepolicy.cil"),
++    "system-ext-map": ("SYSTEM_EXT", "etc/selinux/mapping/202504.cil"),
++    "system-ext-compat": ("SYSTEM_EXT", "etc/selinux/mapping/202504.compat.cil"),
++    "product": ("PRODUCT", "etc/selinux/product_sepolicy.cil"),
++    "product-map": ("PRODUCT", "etc/selinux/mapping/202504.cil"),
++    "genfs": ("SYSTEM", "etc/selinux/plat_sepolicy_genfs_202504.cil"),
++}
++HASH_PATHS = {
++    name + "-hash": (partition, "etc/selinux/" + name.replace("-", "_")
++                    + "_sepolicy_and_mapping.sha256")
++    for name, partition in (("plat", "SYSTEM"), ("system-ext", "SYSTEM_EXT"),
++                            ("product", "PRODUCT"))
++}
++# Exact original files consumed by the installed vendor/ODM policy modules.
++# They are exported, never added to the image's allowed modification set.
++RAW_VENDOR_FILES = (
++    "plat_sepolicy_vers.txt", "genfs_labels_version.txt", "selinux_denial_metadata",
++    "vendor_file_contexts", "vendor_hwservice_contexts", "vendor_keystore2_key_contexts",
++    "vendor_mac_permissions.xml", "vendor_property_contexts", "vendor_seapp_contexts",
++    "vendor_service_contexts", "vendor_tee_service_contexts", "vndservice_contexts")
++RAW_ODM_FILES = (
++    "odm_sepolicy.cil", "odm_file_contexts", "odm_hwservice_contexts",
++    "odm_mac_permissions.xml", "odm_property_contexts", "odm_seapp_contexts",
++    "odm_service_contexts", "precompiled_sepolicy",
++    *("precompiled_sepolicy." + relative.rsplit("/", 1)[1]
++      for _, relative in HASH_PATHS.values()))
++
++REQUIRED_INPUTS = frozenset(PLATFORM_PATHS) | {
++    "odm-stock", "macros", "global-macros", "codec-source", "secilc", "m4", "workspace"}
++
++
++@dataclass(frozen=True)
++class Inputs:
++    paths: dict[str, Path]
++
++    @classmethod
++    def parse(cls, arguments: list[str]) -> "Inputs | None":
++        if not arguments:
++            return None
++        values = {}
++        for argument in arguments:
++            name, separator, value = argument.partition("=")
++            image.require(separator and value and name not in values,
++                          "invalid or duplicate policy input")
++            values[name] = Path(value)
++        image.require(set(values) == REQUIRED_INPUTS | set(HASH_PATHS),
++                      "policy inputs must contain the complete fixed contract")
++        for name in REQUIRED_INPUTS - {"workspace"}:
++            image.require(values[name].is_file(), "missing policy input: " + name)
++        image.require(values["workspace"].is_dir(), "policy workspace must already exist")
++        return cls(values)
++
++    def read(self, name: str) -> bytes:
++        return self.paths[name].read_bytes()
++
++
++def read_regular(reader: Path, stock: Path, entries: dict, path: bytes) -> bytes:
++    image.require(path in entries and stat.S_ISREG(entries[path]["mode"])
++                  and entries[path]["nlink"] == 1,
++                  "policy input must be an unaliased regular inode: " + os.fsdecode(path))
++    return image.run([reader, "cat", stock, os.fsdecode(path)]).stdout
++
++
++def verify_platform_hal_contract(data: bytes) -> None:
++    # Compiler output uses explicit members; refuse a different/ambiguous
++    # attribute expression rather than assuming the three HAL clients exist.
++    view = re.sub(rb'"(?:\\.|[^"\\])*"|;[^\n]*',
++                  lambda m: b" " if m[0].startswith(b";") else m[0], data)
++    for client, hal in ((b"virtualizationmanager_vendor", b"hal_secretkeeper"),
++                        (b"virtualizationmanager_vendor", b"hal_vm_capabilities"),
++                        (b"early_virtmgr_vendor", b"hal_secretkeeper")):
++        matches = re.findall(rb"\(\s*typeattributeset\s+" + hal
++                             + rb"_client\s+\(([^()]*)\)\s*\)", view)
++        image.require(sum(m.split().count(client) for m in matches) == 1,
++                      "missing or duplicated actual AVF HAL client")
++        for source, target in ((client, hal), (hal, client)):
++            expression = (rb"\(\s*allow\s+" + source + rb"\s+" + target
++                          + rb"\s+\(\s*memfd_file\s+\(([^()]*)\)\s*\)\s*\)")
++            rules = re.findall(expression, view)
++            image.require(len(rules) == 1 and Counter(rules[0].split())
++                          == Counter(b"read write getattr map".split()),
++                          "actual AVF HAL memfd contract differs")
++
++
++def cache_selection(reader: Path, odm: Path, entries: dict,
++                    actual_hashes: dict[str, bytes | None]) -> list[str]:
++    binary = b"etc/selinux/precompiled_sepolicy"
++    if binary not in entries:
++        return ["ODM has no precompiled policy"]
++    read_regular(reader, odm, entries, binary)
++    reasons = []
++    for key, (_, relative) in HASH_PATHS.items():
++        old_path = b"etc/selinux/precompiled_sepolicy." + relative.rsplit("/", 1)[1].encode()
++        old = (read_regular(reader, odm, entries, old_path).split(b"\n", 1)[0:1]
++               if old_path in entries else [])
++        current = actual_hashes[key]
++        first = current.split(b"\n", 1)[0:1] if current is not None else []
++        # Match FindPrecompiledSplitPolicy: missing/empty/mismatched current or
++        # old hashes invalidate the cache; both absent leaves this pair neutral.
++        if current is None:
++            if old_path in entries:
++                reasons.append(key + ": current hash missing")
++        elif not first or not first[0] or not old or first != old:
++            reasons.append(key + ": hash differs or is empty")
++    image.require(bool(reasons), "old ODM precompiled policy would bypass the derived CIL")
++    return reasons
++
++
++def generate(reader: Path, stock: Path, entries: dict, inputs: Inputs,
++             artifacts: dict[str, bytes] | None = None) -> tuple[dict[bytes, bytes], dict]:
++    paths = inputs.paths
++    image.require(read_regular(reader, stock, entries,
++                               b"etc/selinux/plat_sepolicy_vers.txt").strip() == b"202504",
++                  "unexpected OEM platform policy version")
++    image.require(read_regular(reader, stock, entries,
++                               b"etc/selinux/genfs_labels_version.txt").strip() == b"202504",
++                  "unexpected OEM genfs policy version")
++    original_vendor = read_regular(reader, stock, entries, VENDOR_CIL)
++    original_public = read_regular(reader, stock, entries, PUBLIC_CIL)
++    odm = image.inventory(reader, paths["odm-stock"])
++    original_odm = read_regular(reader, paths["odm-stock"], odm, ODM_CIL)
++    for variant in ("user", "userdebug"):
++        app.macro_exclusions(paths["m4"], paths["macros"], variant)
++        codec.validate_producer(paths["m4"], paths["macros"], paths["codec-source"], variant)
++    avf.validate_producer(paths["m4"], paths["global-macros"], paths["macros"])
++    verify_platform_hal_contract(inputs.read("product"))
++    vendor, binder_count = binder.repair(original_vendor)
++    vendor, app_count = app.derive(vendor, "userdebug")
++    vendor, codec_count = codec.derive(vendor, "userdebug")
++    vendor, avf_count = avf.adapt(vendor)
++    vendor = display.repair(vendor)
++    public, property_count = prop.adapt(original_public, inputs.read("plat"), inputs.read("plat-map"))
++    changes = {VENDOR_CIL: vendor, PUBLIC_CIL: public}
++    hashes = {name: paths[name].read_bytes() if paths[name].is_file() else None for name in HASH_PATHS}
++    reasons = cache_selection(reader, paths["odm-stock"], odm, hashes)
++    with tempfile.TemporaryDirectory(prefix="popsicle-strict-policy-", dir=paths["workspace"]) as temporary:
++        root = Path(temporary)
++        for name, content in (("vendor.cil", vendor), ("public.cil", public), ("odm.cil", original_odm)):
++            (root / name).write_bytes(content)
++        # Fixed policy version and required full input list. There is deliberately
++        # no caller-supplied compiler argument or ignore-neverallow switch.
++        image.run([paths["secilc"], "-m", "-M", "true", "-G", "-v", "-c", "30",
++                   *(paths[name] for name in PLATFORM_PATHS if name != "genfs"),
++                   root / "public.cil", root / "odm.cil", paths["genfs"], root / "vendor.cil",
++                   "-o", root / "policy", "-f", root / "file_contexts"])
++        image.require((root / "policy").is_file() and (root / "policy").stat().st_size > 0,
++                      "strict compiler produced no policy")
++        if artifacts is not None:
++            artifacts["strict-policy"] = (root / "policy").read_bytes()
++            artifacts["strict-inputs.cil"] = b"\n".join([
++                *(inputs.read(name) for name in PLATFORM_PATHS if name != "genfs"),
++                public, original_odm, inputs.read("genfs"), vendor]) + b"\n"
++            for original, inventory, names in ((stock, entries, RAW_VENDOR_FILES),
++                                                (paths["odm-stock"], odm, RAW_ODM_FILES)):
++                for name in names:
++                    artifacts[name] = read_regular(reader, original, inventory,
++                                                  b"etc/selinux/" + name.encode())
++    return changes, {"binder_rules": sum(binder_count.values()), "app_sets": app_count,
++                     "codec_guards": codec_count, "property_guards": property_count,
++                     "avf_transitions": avf_count, "avf_added_rules": len(avf.ADDITIONS),
++                     "display_rules": sum(display.expected_rules().values()),
++                     "old_odm_cache_rejected": reasons, "strict_neverallow": "passed"}
++
++
++def publish(reader: Path, stock: Path, inputs: Inputs, output: Path) -> dict:
++    image.require(not output.is_symlink(), "policy output directory is a symlink")
++    output = output.resolve()
++    for path in [stock, *(p for name, p in inputs.paths.items() if name != "workspace")]:
++        image.require(not path.resolve().is_relative_to(output), "policy output contains an input")
++    image.require(output.parent.is_dir(), "policy output parent must already exist")
++    outputs = {}
++    changes, report = generate(reader, stock, image.inventory(reader, stock), inputs, outputs)
++    outputs.update({os.fsdecode(path.rsplit(b"/", 1)[1]): data for path, data in changes.items()})
++    with tempfile.TemporaryDirectory(prefix=".policy-publish-", dir=output.parent) as temporary:
++        prepared = Path(temporary)
++        for name, data in outputs.items():
++            (prepared / name).write_bytes(data)
++        output.mkdir(exist_ok=True)
++        for name in outputs:
++            existing = output / name
++            if existing.exists() or existing.is_symlink():
++                image.require(not existing.is_symlink() and existing.is_file()
++                              and existing.stat().st_nlink == 1,
++                              "policy output aliases another file")
++        for name in outputs:
++            os.replace(prepared / name, output / name)
++    return report
++
++
++def verify_target_files(reader: Path, stock: Path, derived: Path, inputs: Inputs, directory: Path | None,
++                        archive: Path | None) -> None:
++    image.require(bool(directory) != bool(archive), "select one policy target-files view")
++    before = image.inventory(reader, stock)
++    changes, _ = generate(reader, stock, before, inputs)
++    after = image.inventory(reader, derived)
++    for path, expected in changes.items():
++        image.require(read_regular(reader, derived, after, path) == expected,
++                      "target-files image policy differs from the proven contract")
++        for field in set(before[path]) - {"nid", "size"}:
++            image.require(after[path][field] == before[path][field],
++                          "target-files image policy metadata changed")
++
++    with _Archive(archive) if archive else _Directory(directory) as view:
++        hashes = {}
++        for name, (partition, relative) in (PLATFORM_PATHS | HASH_PATHS).items():
++            candidates = [partition + "/" + relative]
++            if partition == "SYSTEM":
++                candidates.append("SYSTEM/system/" + relative)
++            present = [path for path in candidates if view.exists(path)]
++            image.require(len(present) <= 1, "ambiguous platform policy path in target-files")
++            content = view.read(present[0]) if present else None
++            expected = inputs.paths[name].read_bytes() if inputs.paths[name].is_file() else None
++            image.require(content == expected, "target-files policy input differs: " + name)
++            if name in HASH_PATHS:
++                hashes[name] = content
++        stock = inputs.paths["odm-stock"]
++        cache_selection(reader, stock, image.inventory(reader, stock), hashes)
++
++
++class _Directory:
++    def __init__(self, root: Path):
++        self.root = root
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *unused):
++        pass
++
++    def exists(self, path: str) -> bool:
++        candidate = self.root / path
++        image.require(not candidate.is_symlink(), "target-files policy file is a symlink")
++        image.require(candidate.resolve().is_relative_to(self.root.resolve()),
++                      "target-files policy path leaves its view")
++        return candidate.is_file()
++
++    def read(self, path: str) -> bytes:
++        return (self.root / path).read_bytes()
++
++
++class _Archive:
++    def __init__(self, path: Path):
++        self.archive = zipfile.ZipFile(path)
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *unused):
++        self.archive.close()
++
++    def exists(self, path: str) -> bool:
++        count = self.archive.namelist().count(path)
++        image.require(count <= 1, "duplicate target-files policy member")
++        if count:
++            entry = self.archive.getinfo(path)
++            image.require(not entry.is_dir() and stat.S_IFMT(entry.external_attr >> 16)
++                          in (0, stat.S_IFREG), "target-files policy member is not a file")
++        return count == 1
++
++    def read(self, path: str) -> bytes:
++        return self.archive.read(path)
+diff --git a/popsicle/vendor_target_files.py b/popsicle/vendor_target_files.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/vendor_target_files.py
+@@ -0,0 +1,365 @@
++# SPDX-License-Identifier: MIT
++"""Export/verify exact target-files views of managed vendor and raw OEM images.
++
++ZIP has no owner/xattr/hardlink representation. Its fs_config and raw metadata
++record are checked alongside the bytes, instead of treating host xattrs as proof.
++"""
++from __future__ import annotations
++
++import json
++import os
++from pathlib import Path
++import shutil
++import stat
++import struct
++import subprocess
++import tempfile
++import zipfile
++
++if __package__:
++    from . import derive_vendor as image
++else:
++    import derive_vendor as image
++
++CONFIG = "META/vendor_filesystem_config.txt"
++METADATA = "META/vendor_erofs_metadata.json"
++PREBUILT_PARTITIONS = ("odm", "system_dlkm", "vendor_dlkm")
++
++
++def partition_paths(partition: str) -> tuple[str, str, str]:
++    image.require(partition in ("vendor", *PREBUILT_PARTITIONS), "unsupported EROFS partition")
++    return (partition.upper(), f"META/{partition}_filesystem_config.txt",
++            f"META/{partition}_erofs_metadata.json")
++
++
++def metadata_bytes(entries: dict[bytes, dict], partition: str = "vendor") -> bytes:
++    partition_paths(partition)
++    records = []
++    for path, values in sorted(entries.items()):
++        record = dict(values)
++        record["path_hex"] = path.hex()
++        record["xattrs"] = [[key.hex(), value.hex()] for key, value in sorted(values["xattrs"].items())]
++        records.append(record)
++    return (json.dumps({"format": 1, "partition": partition, "entries": records},
++                       sort_keys=True, separators=(",", ":")) + "\n").encode()
++
++
++def config_bytes(entries: dict[bytes, dict], partition: str = "vendor") -> bytes:
++    partition_paths(partition)
++    lines = []
++    for path, item in sorted(entries.items()):
++        image.require(not any(byte <= 32 or byte >= 127 for byte in path),
++                      "image path cannot be represented by Android fs_config")
++        capability = item["xattrs"].get(b"security.capability")
++        mask = 0
++        if capability is not None:
++            image.require(len(capability) == 20, "unsupported VFS capability revision")
++            magic, low, inherit_low, high, inherit_high = struct.unpack("<5I", capability)
++            mask = low | (high << 32)
++            image.require(magic == 0x02000001 and not inherit_low and not inherit_high and mask,
++                          "capability cannot be represented exactly by Android fs_config")
++        name = partition.encode("ascii") + (b"/" + path if path else b"")
++        lines.append(name + f' {item["uid"]} {item["gid"]} {stat.S_IMODE(item["mode"]):o}'
++                     f' capabilities=0x{mask:x}\n'.encode())
++    return b"".join(lines)
++
++
++def logical_paths(root: Path) -> dict[bytes, Path]:
++    found = {b"": root}
++    for directory, directories, files in os.walk(root, followlinks=False):
++        for name in directories + files:
++            path = Path(directory) / name
++            found[os.fsencode(path.relative_to(root))] = path
++    return found
++
++
++def supported_view(entries: dict[bytes, dict]) -> None:
++    for path, item in entries.items():
++        image.require(stat.S_IFMT(item["mode"]) in {stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK},
++                      f"target-files ZIP cannot encode special inode {os.fsdecode(path)!r}")
++
++
++def write_file(reader: Path, source_image: Path, source_path: bytes, output: Path, size: int) -> None:
++    command = [str(reader), "cat", str(source_image), os.fsdecode(source_path)]
++    with output.open("xb") as destination, tempfile.TemporaryFile() as errors:
++        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors,
++                              env=image.environment()) as process:
++            try:
++                shutil.copyfileobj(process.stdout, destination, 1024 * 1024)
++            except BaseException:
++                process.kill()
++                raise
++            finally:
++                process.stdout.close()
++            if process.wait():
++                errors.seek(0)
++                raise subprocess.CalledProcessError(process.returncode, command, stderr=errors.read())
++        image.require(destination.tell() == size, "image file size changed while exporting")
++
++
++def export(reader: Path, source_image: Path, target_files: Path, partition: str = "vendor") -> None:
++    directory, config_path, metadata_path = partition_paths(partition)
++    entries = image.inventory(reader, source_image)
++    supported_view(entries)
++    config, metadata = config_bytes(entries, partition), metadata_bytes(entries, partition)
++    root = target_files / directory
++    image.require(target_files.is_dir() and (target_files / "META").is_dir(),
++                  "target_files and META must already exist")
++    for path in (root, target_files / config_path, target_files / metadata_path):
++        image.require(not path.exists() and not path.is_symlink(), "partition export output already exists")
++    inodes: dict[int, Path] = {}
++    directories = []
++    for name, item in sorted(entries.items()):
++        path = root / os.fsdecode(name)
++        kind = stat.S_IFMT(item["mode"])
++        if kind == stat.S_IFDIR:
++            path.mkdir(mode=0o700)
++            directories.append((path, item))
++            continue
++        if item["nid"] in inodes:
++            os.link(inodes[item["nid"]], path, follow_symlinks=False)
++            continue
++        inodes[item["nid"]] = path
++        if kind == stat.S_IFREG:
++            write_file(reader, source_image, name, path, item["size"])
++            path.chmod(stat.S_IMODE(item["mode"]))
++        else:
++            target = image.run([reader, "cat", source_image, os.fsdecode(name)]).stdout
++            os.symlink(os.fsdecode(target), path)
++        mtime = item["mtime"] * 1_000_000_000 + item["mtime_nsec"]
++        os.utime(path, ns=(mtime, mtime), follow_symlinks=False)
++    for path, item in reversed(directories):
++        path.chmod(stat.S_IMODE(item["mode"]))
++        mtime = item["mtime"] * 1_000_000_000 + item["mtime_nsec"]
++        os.utime(path, ns=(mtime, mtime))
++    with (target_files / config_path).open("xb") as output:
++        output.write(config)
++    with (target_files / metadata_path).open("xb") as output:
++        output.write(metadata)
++    verify_directory(reader, source_image, target_files, require_image=False, partition=partition)
++
++
++def compare_stream_to_image(reader: Path, source_image: Path, name: bytes, stream, size: int) -> None:
++    command = [str(reader), "cat", str(source_image), os.fsdecode(name)]
++    with tempfile.TemporaryFile() as errors, subprocess.Popen(
++            command, stdout=subprocess.PIPE, stderr=errors, env=image.environment()) as process:
++        try:
++            remaining = size
++            while remaining:
++                count = min(remaining, 1024 * 1024)
++                expected = process.stdout.read(count)
++                actual = stream.read(count)
++                image.require(len(expected) == count and expected == actual,
++                              f"target-files content differs: {os.fsdecode(name)!r}")
++                remaining -= count
++            image.require(not process.stdout.read(1) and not stream.read(1), "unexpected file tail")
++        except BaseException:
++            process.kill()
++            raise
++        finally:
++            process.stdout.close()
++        if process.wait():
++            errors.seek(0)
++            raise subprocess.CalledProcessError(process.returncode, command, stderr=errors.read())
++
++
++def compare_files(first: Path, second: Path) -> None:
++    image.require(first.stat().st_size == second.stat().st_size, "target-files image size differs")
++    with first.open("rb") as a, second.open("rb") as b:
++        while block := a.read(1024 * 1024):
++            image.require(block == b.read(len(block)), "target-files image bytes differ")
++
++
++def verify_prebuilt_inputs(fsck: Path, stock: Path, installed: Path, partition: str) -> None:
++    image.require(partition in PREBUILT_PARTITIONS, "unsupported unchanged prebuilt partition")
++    image.require(stock.name == installed.name == partition + ".img",
++                  "prebuilt image filename does not match partition")
++    image.require(stock.is_file() and installed.is_file(), "prebuilt image is missing")
++    compare_files(stock, installed)
++    # fsck validates the filesystem without extracting to a host tree. The
++    # complete byte comparison above includes all original AVB/footer/padding.
++    image.run([fsck, "--extract", stock])
++
++
++def audit_prebuilt_stage(reader: Path, stock: Path, stage: Path, partition: str) -> None:
++    image.require(partition in PREBUILT_PARTITIONS, "unsupported unchanged prebuilt partition")
++    if not stage.exists() and not stage.is_symlink():
++        return
++    image.require(stage.is_dir() and not stage.is_symlink(), "prebuilt stage must be a real directory")
++    entries = image.inventory(reader, stock)
++    problems = []
++    for name, path in logical_paths(stage).items():
++        if name not in entries:
++            problems.append(f"{os.fsdecode(name)}: unapproved new path")
++            continue
++        expected = entries[name]
++        kind = stat.S_IFMT(path.lstat().st_mode)
++        if kind != stat.S_IFMT(expected["mode"]):
++            problems.append(f"{os.fsdecode(name)}: inode type differs")
++        elif kind == stat.S_IFLNK:
++            target = image.run([reader, "cat", stock, os.fsdecode(name)]).stdout
++            if os.fsencode(os.readlink(path)) != target:
++                problems.append(f"{os.fsdecode(name)}: symlink target differs")
++        elif kind == stat.S_IFREG:
++            try:
++                with path.open("rb") as stream:
++                    compare_stream_to_image(reader, stock, name, stream, expected["size"])
++            except ValueError:
++                problems.append(f"{os.fsdecode(name)}: content differs")
++    image.require(not problems, f"unapproved {partition} stage differences:\n" + "\n".join(problems))
++
++
++def verify_directory(reader: Path, source_image: Path, target_files: Path,
++                     require_image: bool = True, key: Path | None = None,
++                     public_key: Path | None = None, fec: Path | None = None,
++                     partition: str = "vendor") -> None:
++    directory, config_path, metadata_path = partition_paths(partition)
++    entries = image.inventory(reader, source_image)
++    supported_view(entries)
++    if require_image:
++        compare_files(source_image, target_files / f"IMAGES/{partition}.img")
++    if require_image and partition == "vendor":
++        image.require(key is not None and public_key is not None and fec is not None,
++                      "expected vendor key inputs and FEC tool are required")
++        if __package__:
++            from . import vendor_avb
++        else:
++            import vendor_avb
++        vendor_avb.verify_info(source_image, (target_files / "META/misc_info.txt").read_bytes(), key, public_key, fec)
++    image.require((target_files / config_path).read_bytes() == config_bytes(entries, partition), "partition fs_config differs")
++    image.require((target_files / metadata_path).read_bytes() == metadata_bytes(entries, partition), "partition raw metadata differs")
++    found = logical_paths(target_files / directory)
++    image.require(set(found) == set(entries), "partition directory path inventory differs")
++    groups = {}
++    for name, item in entries.items():
++        path = found[name]
++        actual = path.lstat()
++        kind = stat.S_IFMT(item["mode"])
++        image.require(stat.S_IFMT(actual.st_mode) == kind, "partition inode type differs")
++        if kind != stat.S_IFLNK:
++            image.require(stat.S_IMODE(actual.st_mode) == stat.S_IMODE(item["mode"]), "partition mode differs")
++        image.require(actual.st_mtime_ns == item["mtime"] * 1_000_000_000 + item["mtime_nsec"],
++                      "partition timestamp differs")
++        if kind == stat.S_IFDIR:
++            continue
++        groups[name] = {"nid": (actual.st_dev, actual.st_ino), "mode": actual.st_mode}
++        if kind == stat.S_IFLNK:
++            expected = image.run([reader, "cat", source_image, os.fsdecode(name)]).stdout
++            image.require(os.fsencode(os.readlink(path)) == expected, "partition symlink target differs")
++        else:
++            with path.open("rb") as stream:
++                compare_stream_to_image(reader, source_image, name, stream, item["size"])
++    image.require(image.hardlinks(groups) == image.hardlinks(entries), "partition hardlink groups differ")
++
++
++def verify_zip(reader: Path, source_image: Path, archive_path: Path,
++               key: Path | None = None, public_key: Path | None = None, fec: Path | None = None,
++               partition: str = "vendor") -> None:
++    directory, config_path, metadata_path = partition_paths(partition)
++    prefix = directory + "/"
++    image_path = f"IMAGES/{partition}.img"
++    entries = image.inventory(reader, source_image)
++    supported_view(entries)
++    with zipfile.ZipFile(archive_path) as archive:
++        if partition == "vendor":
++            image.require(key is not None and public_key is not None and fec is not None,
++                          "expected vendor key inputs and FEC tool are required")
++            if __package__:
++                from . import vendor_avb
++            else:
++                import vendor_avb
++            vendor_avb.verify_info(source_image, archive.read("META/misc_info.txt"), key, public_key, fec)
++        names = archive.namelist()
++        image.require(len(names) == len(set(names)), "duplicate ZIP entry")
++        image.require(archive.read(config_path) == config_bytes(entries, partition), "ZIP partition fs_config differs")
++        image.require(archive.read(metadata_path) == metadata_bytes(entries, partition), "ZIP partition raw metadata differs")
++        with archive.open(image_path) as packed, source_image.open("rb") as source:
++            image.require(archive.getinfo(image_path).file_size == source_image.stat().st_size,
++                          "ZIP partition image size differs")
++            while block := source.read(1024 * 1024):
++                image.require(packed.read(len(block)) == block, "ZIP partition image bytes differ")
++        expected_files = {prefix.encode("ascii") + path for path, item in entries.items()
++                          if not stat.S_ISDIR(item["mode"])}
++        actual_files = {os.fsencode(name) for name in names
++                        if name.startswith(prefix) and not name.endswith("/")}
++        image.require(actual_files == expected_files, "ZIP partition file inventory differs")
++        expected_directories = {prefix.encode("ascii") + (path + b"/" if path else b"")
++                                for path, item in entries.items() if stat.S_ISDIR(item["mode"])}
++        actual_directories = {os.fsencode(name) for name in names
++                              if name.startswith(prefix) and name.endswith("/")}
++        image.require(actual_directories == expected_directories, "ZIP partition directory inventory differs")
++        for name in actual_directories:
++            mode = archive.getinfo(os.fsdecode(name)).external_attr >> 16
++            image.require(stat.S_ISDIR(mode) and stat.S_IMODE(mode) == 0o755,
++                          "ZIP partition directory transport mode differs")
++        for path, item in entries.items():
++            kind = stat.S_IFMT(item["mode"])
++            if kind == stat.S_IFDIR:
++                continue
++            name = prefix + os.fsdecode(path)
++            entry = archive.getinfo(name)
++            mode = entry.external_attr >> 16
++            # Fixed soong_zip deliberately normalizes regular modes to 0644/0755;
++            # actual Android modes remain exact in fs_config and raw metadata.
++            transport_mode = 0o777 if kind == stat.S_IFLNK else (
++                0o755 if item["mode"] & 0o100 else 0o644)
++            image.require(stat.S_IFMT(mode) == kind and stat.S_IMODE(mode) == transport_mode,
++                          "ZIP partition mode/type differs")
++            with archive.open(entry) as stream:
++                compare_stream_to_image(reader, source_image, path, stream, item["size"])
++
++
++def audit_stage(reader: Path, stock: Path, stage: Path, descriptor: Path,
++                fstab: Path | None = None, policy_inputs=None,
++                source_notice: Path | None = None, stage_inputs=None) -> None:
++    entries = image.inventory(reader, stock)
++    fstab_data = image.managed_fstab(reader, stock, entries, fstab)
++    policy, _ = image.managed_policy(reader, stock, entries, policy_inputs)
++    notice = image.managed_notice(reader, stock, entries, source_notice)
++    if stage_inputs is not None:
++        image.require(stage_inputs.stage.resolve() == stage.resolve(), "different stage inputs")
++        image.resolve_stage_inputs(stage_inputs, reader, stock, entries,
++                                   image.descriptor_bytes(descriptor), fstab_data, policy,
++                                   source_notice)
++        return
++    problems = []
++    found = logical_paths(stage)
++    image.require(image.DESTINATION in found, "generated descriptor is missing from vendor stage")
++    image.require(notice is None or image.NOTICE in found, "source NOTICE is missing from stage")
++    image.require(set(policy) <= set(found), "managed policy provider is missing from vendor stage")
++    for name, path in found.items():
++        actual = path.lstat()
++        if name == image.NOTICE and notice is not None:
++            if not stat.S_ISREG(actual.st_mode) or path.read_bytes() != source_notice.read_bytes():
++                problems.append("source NOTICE provider mismatch")
++            continue
++        if name in policy:
++            if not stat.S_ISREG(actual.st_mode) or path.read_bytes() != policy[name]:
++                problems.append(f"{os.fsdecode(name)}: managed policy provider mismatch")
++            continue
++        if name == image.DESTINATION:
++            if not stat.S_ISREG(actual.st_mode) or path.read_bytes() != descriptor.read_bytes():
++                problems.append(f"{os.fsdecode(name)}: descriptor mismatch")
++            continue
++        if name == image.FSTAB and fstab_data is not None:
++            if not stat.S_ISREG(actual.st_mode) or path.read_bytes() != fstab_data:
++                problems.append(f"{os.fsdecode(name)}: managed fstab mismatch")
++            continue
++        if name not in entries:
++            problems.append(f"{os.fsdecode(name)}: unapproved new path")
++            continue
++        expected = entries[name]
++        kind = stat.S_IFMT(actual.st_mode)
++        if kind != stat.S_IFMT(expected["mode"]):
++            problems.append(f"{os.fsdecode(name)}: inode type differs")
++        elif kind == stat.S_IFLNK:
++            target = image.run([reader, "cat", stock, os.fsdecode(name)]).stdout
++            if os.fsencode(os.readlink(path)) != target:
++                problems.append(f"{os.fsdecode(name)}: symlink target differs")
++        elif kind == stat.S_IFREG:
++            try:
++                with path.open("rb") as stream:
++                    compare_stream_to_image(reader, stock, name, stream, expected["size"])
++            except ValueError:
++                problems.append(f"{os.fsdecode(name)}: content differs")
++    image.require(not problems, "unapproved vendor stage differences:\n" + "\n".join(problems))
+diff --git a/popsicle/stage_inputs.py b/popsicle/stage_inputs.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/stage_inputs.py
+@@ -0,0 +1,197 @@
++# SPDX-License-Identifier: MIT
++"""Resolve the product file list against exact build outputs and Android metadata."""
++from __future__ import annotations
++
++from dataclasses import dataclass
++import os
++from pathlib import Path
++import stat
++import struct
++import subprocess
++
++
++def require(condition: bool, message: str) -> None:
++    if not condition:
++        raise ValueError(message)
++
++
++def image_path(value: bytes) -> bytes:
++    require(value and not value.startswith(b"/") and len(value) < 1000
++            and all(32 < byte < 127 for byte in value)
++            and all(part not in {b"", b".", b".."} for part in value.split(b"/")),
++            "unsafe product file-list path")
++    return value
++
++
++def selected_paths(stage: Path, file_list: Path) -> dict[bytes, Path]:
++    require(stage.is_dir() and not stage.is_symlink(), "stage must be a real directory")
++    data = file_list.read_bytes()
++    require(data.endswith(b"\n"), "product file list must end with a newline")
++    names = [image_path(line) for line in data.splitlines()]
++    require(len(names) == len(set(names)), "duplicate product file-list path")
++    closure = {b"", *names}
++    for name in names:
++        parent = name.rpartition(b"/")[0]
++        while parent:
++            closure.add(parent)
++            parent = parent.rpartition(b"/")[0]
++    found = {b"": stage}
++    for directory, directories, files in os.walk(stage, followlinks=False):
++        for name in directories + files:
++            path = Path(directory) / name
++            found[os.fsencode(path.relative_to(stage))] = path
++    require(set(found) == closure,
++            "stage differs from product file list and parent closure: missing="
++            + repr(sorted(closure - set(found))) + " extra=" + repr(sorted(set(found) - closure)))
++    for name in closure - {b""}:
++        parent = name.rpartition(b"/")[0]
++        require(stat.S_ISDIR(found[parent].lstat().st_mode),
++                "product path traverses a non-directory or symlink parent")
++    return found
++
++
++@dataclass(frozen=True)
++class AndroidMetadata:
++    fs_config: Path
++    target_out: Path
++    selabel_lookup: Path
++    file_contexts: Path
++    partition: str = "vendor"
++
++    def __post_init__(self) -> None:
++        require(self.partition in {"vendor", "odm"}, "unsupported stage metadata partition")
++
++    def for_paths(self, kinds: dict[bytes, int], timestamp: dict) -> dict[bytes, dict]:
++        if not kinds:
++            return {}
++        ordered = sorted(kinds)
++        prefix = self.partition.encode("ascii") + b"/"
++        names = {prefix + image_path(path): path for path in ordered}
++        input_data = b"".join(prefix + path
++                              + (b"/" if kinds[path] == stat.S_IFDIR else b"") + b"\n"
++                              for path in ordered)
++        result = subprocess.run([str(self.fs_config), "-C", "-D", str(self.target_out),
++                                 "-R", self.partition + "/"],
++                                input=input_data, capture_output=True, check=True)
++        configs = {}
++        for line in result.stdout.splitlines():
++            fields = line.split()
++            require(len(fields) == 5 and fields[0] in names
++                    and fields[0] not in configs and fields[4].startswith(b"capabilities=0x"),
++                    "unexpected Android fs_config result")
++            uid, gid, mode = int(fields[1]), int(fields[2]), int(fields[3], 8)
++            capability = int(fields[4].split(b"=", 1)[1], 16)
++            require(0 <= uid <= 0xffffffff and 0 <= gid <= 0xffffffff
++                    and 0 <= mode <= 0o7777 and 0 <= capability < (1 << 64),
++                    "Android fs_config value is out of range")
++            configs[fields[0]] = (uid, gid, mode, capability)
++        require(set(configs) == set(names), "Android fs_config omitted a selected path")
++        metadata = {}
++        for full_name, path in names.items():
++            uid, gid, mode, capability = configs[full_name]
++            kind = kinds[path]
++            require(kind in {stat.S_IFDIR, stat.S_IFREG},
++                    "new stage inode type needs a dedicated contract")
++            label_result = subprocess.run(
++                [str(self.selabel_lookup), "-r", "-b", "file", "-f", str(self.file_contexts),
++                 "-k", "/" + os.fsdecode(full_name), "-t", str(kind | mode)],
++                capture_output=True, check=True)
++            prefix = b"Default context: "
++            output = label_result.stdout
++            require(output.startswith(prefix) and output.endswith(b"\n")
++                    and output.count(b"\n") == 1, "unexpected selabel_lookup result")
++            label = output[len(prefix):-1]
++            require(label and all(32 < byte < 127 for byte in label), "invalid SELinux label")
++            # The pinned EROFS writer stores strlen(secontext), without the C terminator.
++            xattrs = {b"security.selinux": label}
++            if capability:
++                xattrs[b"security.capability"] = struct.pack(
++                    "<5I", 0x02000001, capability & 0xffffffff, 0, capability >> 32, 0)
++            metadata[path] = {"mode": kind | mode, "uid": uid, "gid": gid, "size": 0,
++                              "mtime": timestamp["mtime"], "mtime_nsec": timestamp["mtime_nsec"],
++                              "nlink": 2 if kind == stat.S_IFDIR else 1, "rdev": 0,
++                              "xattrs": xattrs}
++        return metadata
++
++
++@dataclass
++class Resolution:
++    replacements: dict[bytes, bytes]
++    additions: dict[bytes, tuple[dict, bytes | None]]
++
++
++@dataclass(frozen=True)
++class Inputs:
++    stage: Path
++    file_list: Path
++    # Exact reviewed module/generated outputs, never directory or suffix exemptions.
++    sources: dict[bytes, Path]
++    metadata: AndroidMetadata
++
++    def resolve(self, original: dict[bytes, dict], read_original,
++                managed_stage: dict[bytes, bytes]) -> Resolution:
++        found = selected_paths(self.stage, self.file_list)
++        require(set(self.sources) <= set(found), "selected source has no product stage path")
++        require(not set(self.sources) & set(managed_stage), "multiple providers for managed path")
++        require(set(managed_stage) <= set(found), "managed provider missing from product file list")
++        replacements = {}
++        new_contents = {}
++        new_kinds = {}
++        source_data = {}
++        for name, path in sorted(found.items()):
++            kind = stat.S_IFMT(path.lstat().st_mode)
++            old = original.get(name)
++            require(old is None or kind == stat.S_IFMT(old["mode"]), "stage inode type conflict")
++            if kind == stat.S_IFDIR:
++                require(name not in self.sources, "source output cannot replace a directory")
++                if old is None:
++                    new_kinds[name] = kind
++                    new_contents[name] = None
++                continue
++            require(kind in {stat.S_IFREG, stat.S_IFLNK}, "unsupported stage inode type")
++            actual = path.read_bytes() if kind == stat.S_IFREG else os.fsencode(os.readlink(path))
++            if name in managed_stage:
++                require(kind == stat.S_IFREG and actual == managed_stage[name],
++                        "managed stage provider differs from its validated input")
++                continue
++            if name in self.sources:
++                source = self.sources[name]
++                require(kind == stat.S_IFREG and source.is_file() and not source.is_symlink()
++                        and not source.resolve().is_relative_to(self.stage.resolve()),
++                        "stage source must be an external regular build output")
++                expected = source.read_bytes()
++                require(actual == expected, "stage differs from selected build output")
++                source_data[name] = expected
++                if old is None:
++                    new_kinds[name] = kind
++                    new_contents[name] = expected
++                elif expected != read_original(name):
++                    replacements[name] = expected
++            else:
++                require(old is not None, "new stage path lacks a reviewed build output: " + os.fsdecode(name))
++                require(actual == read_original(name), "unreviewed stage content differs from OEM: " + os.fsdecode(name))
++        groups = {}
++        for path, item in original.items():
++            if not stat.S_ISDIR(item["mode"]):
++                groups.setdefault(item["nid"], set()).add(path)
++        for group in groups.values():
++            if group & replacements.keys():
++                require(group <= replacements.keys()
++                        and len({replacements[path] for path in group}) == 1,
++                        "replacement must preserve the entire original hardlink group")
++        new_meta = self.metadata.for_paths(new_kinds, original[b""])
++        additions = {}
++        for name, data in new_contents.items():
++            meta = new_meta[name]
++            meta["size"] = 0 if data is None else len(data)
++            if data is None:
++                meta["nlink"] += sum(kind == stat.S_IFDIR and path.rpartition(b"/")[0] == name
++                                     for path, kind in new_kinds.items())
++            additions[name] = (meta, data)
++        # Catch ordinary concurrent source/stage edits before publishing the resolved input.
++        require(selected_paths(self.stage, self.file_list).keys() == found.keys(),
++                "stage changed during input resolution")
++        for name, expected in source_data.items():
++            require(self.sources[name].read_bytes() == expected and found[name].read_bytes() == expected,
++                    "selected input changed during stage resolution")
++        return Resolution(replacements, additions)
+diff --git a/popsicle/odm_tool.py b/popsicle/odm_tool.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/odm_tool.py
+@@ -0,0 +1,102 @@
++#!/usr/bin/env python3
++# SPDX-License-Identifier: MIT
++"""Device-specific camera ODM derivation; no unchanged-prebuilt or module bypass."""
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import subprocess
++
++if __package__:
++    from . import derive_vendor as image, odm_avb, odm_image, odm_target_files, stage_inputs
++else:
++    import derive_vendor as image
++    import odm_avb
++    import odm_image
++    import odm_target_files
++    import stage_inputs
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("command", choices=("derive", "verify", "seal", "verify-avb",
++                                            "sync-avb-info", "audit-stage", "export",
++                                            "verify-target-files"))
++    for name in ("reader", "fsck", "mkfs", "stock", "raw", "image", "output", "id-buffer-patch",
++                 "device-config-patch", "key", "public-key", "fec", "avbtool", "image-info",
++                 "target-files", "target-files-zip", "stage", "source-notice",
++                 "stage-file-list", "stage-fs-config", "stage-target-out",
++                 "stage-selabel-lookup", "stage-file-contexts"):
++        parser.add_argument("--" + name, type=Path)
++    parser.add_argument("--algorithm")
++    args = parser.parse_args()
++    source = ("reader", "fsck", "stock", "id_buffer_patch", "device_config_patch")
++    signed = (*source, "raw", "image", "key", "public_key", "algorithm", "fec")
++    required = {
++        "derive": (*source, "mkfs", "output"), "verify": (*source, "raw"),
++        "audit-stage": ("reader", "stock", "stage", "id_buffer_patch", "device_config_patch"),
++        "seal": (*source, "raw", "output", "key", "public_key", "algorithm", "fec",
++                 "avbtool", "image_info"),
++        "verify-avb": signed,
++        "sync-avb-info": ("image", "image_info", "key", "public_key", "fec"),
++        "export": (*signed, "target_files", "stage"),
++        "verify-target-files": (*signed, "stage"),
++    }
++    try:
++        stage_values = (args.stage, args.stage_file_list, args.stage_fs_config,
++                        args.stage_target_out, args.stage_selabel_lookup, args.stage_file_contexts)
++        stage_config = None
++        if any(value is not None for value in stage_values):
++            image.require(args.command != "sync-avb-info"
++                          and all(value is not None for value in stage_values),
++                          "complete ODM stage inputs are required for this command")
++            metadata = stage_inputs.AndroidMetadata(args.stage_fs_config, args.stage_target_out,
++                args.stage_selabel_lookup, args.stage_file_contexts, partition="odm")
++            stage_config = stage_inputs.Inputs(args.stage, args.stage_file_list, {}, metadata)
++        image.require(args.command not in {"audit-stage", "export", "verify-target-files"}
++                      or stage_config is not None,
++                      "complete ODM stage inputs are required for this command")
++        image.require(all(getattr(args, name) is not None for name in required[args.command]),
++                      "missing required ODM command inputs")
++        transforms = (args.id_buffer_patch, args.device_config_patch)
++        report = {"command": args.command, "verification": "passed"}
++        if args.command == "derive":
++            report = odm_image.derive(args.reader, args.mkfs, args.fsck, args.stock,
++                                      args.output, transforms, args.source_notice, stage_config)
++        elif args.command == "verify":
++            report = odm_image.verify(args.reader, args.fsck, args.stock, args.raw,
++                                      transforms, args.source_notice, stage_config)
++        elif args.command == "audit-stage":
++            odm_image.audit_stage(args.reader, args.stock, args.stage, transforms,
++                                  args.source_notice, stage_config)
++        elif args.command == "seal":
++            odm_image.verify(args.reader, args.fsck, args.stock, args.raw,
++                             transforms, args.source_notice, stage_config)
++            report = odm_avb.seal(args.reader, args.stock, args.raw, args.output, args.image_info,
++                                  args.avbtool, args.key, args.public_key, args.algorithm, args.fec)
++        elif args.command == "sync-avb-info":
++            odm_avb.sync_info(args.image, args.image_info, args.key, args.public_key, args.fec)
++        else:
++            arguments = (args.reader, args.fsck, args.stock, args.raw, args.image, transforms,
++                         args.key, args.public_key, args.algorithm, args.fec)
++            if args.command == "verify-avb":
++                report = odm_target_files.verify_source(*arguments, source_notice=args.source_notice,
++                                                        stage_inputs=stage_config)
++            elif args.command == "export":
++                image.require(args.target_files_zip is None, "ODM export requires a directory")
++                report = odm_target_files.export(*arguments, args.target_files, args.stage,
++                                                 args.source_notice, stage_config)
++            else:
++                report = odm_target_files.verify(*arguments, args.stage,
++                    args.target_files, args.target_files_zip, args.source_notice, stage_config)
++        print(json.dumps(report, sort_keys=True))
++    except (ValueError, OSError, EOFError, KeyError, subprocess.CalledProcessError) as error:
++        if isinstance(error, subprocess.CalledProcessError):
++            message = (error.stderr or b"").decode("utf-8", "replace").strip()
++            parser.exit(1, f"{error.cmd[0]} failed ({error.returncode}): {message}\n")
++        parser.exit(1, f"{error}\n")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/popsicle/odm_image.py b/popsicle/odm_image.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/odm_image.py
+@@ -0,0 +1,207 @@
++# SPDX-License-Identifier: MIT
++"""Derive ODM by replaying the two guarded camera transformations on raw inodes.
++
++The transform sources are explicit build prerequisites. Only their pure patch_elf
++functions run; module packaging and previous patched output are never inputs.
++"""
++from __future__ import annotations
++
++import importlib.util
++import os
++from pathlib import Path
++import shutil
++import stat
++import subprocess
++import tempfile
++import uuid
++
++if __package__:
++    from . import derive_vendor as image, vendor_target_files as tf
++else:
++    import derive_vendor as image
++    import vendor_target_files as tf
++
++CAMERA_PATHS = (b"lib64/libmicamera_adapter.so", b"lib64/hw/com.qti.chi.override.so")
++# Audited instruction byte offsets, not digests or copies of proprietary data.
++CHANGES = ({0x40539, 0x40551}, {0x4E7F38, 0x4E7F39, 0x4E7F3B})
++
++
++def patch_bytes(original: bytes, source: Path, index: int) -> bytes:
++    image.require(source.is_file(), "camera transformation source is missing")
++    spec = importlib.util.spec_from_file_location("_popsicle_odm_transform", source)
++    image.require(spec is not None and spec.loader is not None, "invalid transformation source")
++    module = importlib.util.module_from_spec(spec)
++    # SourceFileLoader can create __pycache__ in its source tree. Reading and
++    # compiling the explicit source instead keeps both reference trees read-only.
++    exec(compile(source.read_bytes(), str(source), "exec"), module.__dict__)
++    result = module.patch_elf(original)
++    image.require(isinstance(result, bytes) and len(result) == len(original),
++                  "camera transformation changed the ELF extent")
++    changed = {i for i, (a, b) in enumerate(zip(original, result)) if a != b}
++    image.require(changed == CHANGES[index], "camera transformation changed unexpected bytes")
++    return result
++
++
++def replacements(reader: Path, stock: Path, entries: dict, transforms: tuple[Path, Path],
++                 source_notice: Path | None = None) -> dict:
++    image.require(len(transforms) == 2, "both camera transformation sources are required")
++    result = {}
++    for index, path in enumerate(CAMERA_PATHS):
++        image.require(path in entries, "official camera input is missing")
++        metadata = entries[path]
++        image.require(metadata["mode"] == stat.S_IFREG | 0o644
++                      and metadata["uid"] == metadata["gid"] == 0
++                      and metadata["nlink"] == 1
++                      and metadata["xattrs"].get(b"security.selinux") == b"u:object_r:vendor_file:s0",
++                      "official camera inode identity differs")
++        image.require(sum(item["nid"] == metadata["nid"] for item in entries.values()) == 1,
++                      "camera input has an aliased inode")
++        original = image.run([reader, "cat", stock, os.fsdecode(path)]).stdout
++        image.require(len(original) == metadata["size"], "official camera extent differs")
++        result[path] = patch_bytes(original, transforms[index], index)
++    notice = image.managed_notice(reader, stock, entries, source_notice)
++    if notice is not None:
++        result[image.NOTICE] = notice
++    return result
++
++
++def check_product_stage(reader: Path, stock: Path, entries: dict, changed: dict,
++                        inputs, source_notice: Path | None) -> None:
++    if inputs is None:
++        return  # Image-only validation has no product stage to compare.
++    image.require(not inputs.sources and inputs.metadata.partition == "odm",
++                  "ODM stage accepts only its guarded providers and ODM metadata")
++    # Camera repairs are image transformations, so a source-stage camera install
++    # is optional. If selected, it must contain the same guarded result.
++    managed = {path: changed[path] for path in CAMERA_PATHS
++               if (inputs.stage / os.fsdecode(path)).exists()}
++    if source_notice is not None:
++        managed[image.NOTICE] = source_notice.read_bytes()
++    resolved = inputs.resolve(entries,
++        lambda path: image.run([reader, "cat", stock, os.fsdecode(path)]).stdout, managed)
++    image.require(not resolved.replacements and not resolved.additions,
++                  "ODM stage exceeds the guarded camera and NOTICE change set")
++
++
++def compare_unchanged(reader: Path, stock: Path, derived: Path, entries: dict, changed: dict) -> None:
++    """Stream every unmodified inode from both raw images, using the existing reader."""
++    visited = set()
++    for path, metadata in entries.items():
++        if path in changed or not (stat.S_ISREG(metadata["mode"])
++                                       or stat.S_ISLNK(metadata["mode"])):
++            continue
++        if metadata["nid"] in visited:
++            continue
++        visited.add(metadata["nid"])
++        command = [str(reader), "cat", str(derived), os.fsdecode(path)]
++        with tempfile.TemporaryFile() as errors, subprocess.Popen(
++                command, stdout=subprocess.PIPE, stderr=errors, env=image.environment()) as process:
++            try:
++                tf.compare_stream_to_image(reader, stock, path, process.stdout, metadata["size"])
++            except BaseException:
++                process.kill()
++                raise
++            finally:
++                process.stdout.close()
++            if process.wait():
++                errors.seek(0)
++                raise subprocess.CalledProcessError(process.returncode, command,
++                                                    stderr=errors.read())
++
++
++def verify(reader: Path, fsck: Path, stock: Path, raw: Path,
++           transforms: tuple[Path, Path], source_notice: Path | None = None,
++           stage_inputs=None) -> dict:
++    image.require(not os.path.samefile(stock, raw), "derived ODM aliases stock")
++    image.run([fsck, "--extract", stock])
++    image.run([fsck, "--extract", raw])
++    before = image.inventory(reader, stock)
++    changed = replacements(reader, stock, before, transforms, source_notice)
++    check_product_stage(reader, stock, before, changed, stage_inputs, source_notice)
++    after = image.inventory(reader, raw)
++    image.require(set(before) == set(after), "ODM path inventory changed")
++    for path, expected in before.items():
++        if path in changed:
++            expected = expected | {"size": len(changed[path])}
++        for field in set(expected) - {"nid"}:
++            image.require(after[path][field] == expected[field],
++                          f"ODM metadata changed: {os.fsdecode(path)!r} {field}")
++    image.require(image.hardlinks(before) == image.hardlinks(after),
++                  "ODM hardlink equivalence groups changed")
++    for path, expected in changed.items():
++        image.require(image.run([reader, "cat", raw, os.fsdecode(path)]).stdout == expected,
++                      "derived ODM bytes differ from the guarded transformation or NOTICE input")
++    compare_unchanged(reader, stock, raw, before, changed)
++    old, new = image.superblock(reader, stock), image.superblock(reader, raw)
++    for key in ("block_size", "uuid", "volume_hex", "feature_compat", "feature_incompat"):
++        image.require(new[key] == old[key], f"ODM filesystem property changed: {key}")
++    image.require(new["blocks"] * new["block_size"] == raw.stat().st_size,
++                  "ODM raw intermediate contains a non-filesystem tail")
++    return {"original_paths": len(before), "modified_paths": [os.fsdecode(p) for p in changed],
++            "new_paths": [], "modified_metadata_paths": [os.fsdecode(p) for p in changed
++                if len(changed[p]) != before[p]["size"]],
++            "filesystem_bytes": raw.stat().st_size,
++            "verification": "complete inode metadata, hardlink groups and all file bytes"}
++
++
++def derive(reader: Path, mkfs: Path, fsck: Path, stock: Path, output: Path,
++           transforms: tuple[Path, Path], source_notice: Path | None = None,
++           stage_inputs=None) -> dict:
++    image.require(stock.is_file(), "official ODM is missing")
++    image.require(not output.exists() and not output.is_symlink(), "ODM output already exists")
++    image.require(output.parent.is_dir(), "ODM output parent must already exist")
++    image.run([fsck, "--extract", stock])
++    entries = image.inventory(reader, stock)
++    changed = replacements(reader, stock, entries, transforms, source_notice)
++    check_product_stage(reader, stock, entries, changed, stage_inputs, source_notice)
++    meta = image.superblock(reader, stock)
++    image.require(0 < meta["block_size"] * meta["blocks"] <= stock.stat().st_size,
++                  "invalid original ODM filesystem extent")
++    data_size = sum(item["size"] for item in entries.values() if stat.S_ISREG(item["mode"]))
++    image.require(shutil.disk_usage(output.parent).free > 2 * data_size + 128 * 1024**2,
++                  "insufficient scratch space for complete ODM derivation")
++    with tempfile.TemporaryDirectory(prefix=".odm-erofs-", dir=output.parent) as temporary:
++        workspace = Path(temporary)
++        archive, candidate = workspace / "source.tar", workspace / "odm.erofs"
++        image.write_image_tar(reader, stock, entries, archive, changed)
++        volume = bytes.fromhex(meta["volume_hex"]).rstrip(b"\0")
++        image.require(b"\0" not in volume, "noncanonical ODM volume label")
++        image.run([mkfs, "--clean=data", "--tar=f", "-zlz4hc", "--preserve-mtime", "--mkfs-time",
++                   f'-b{meta["block_size"]}', f'-T{meta["build_time"]}',
++                   f'-U{uuid.UUID(hex=meta["uuid"])}', "-L", os.fsdecode(volume),
++                   "--ovlfs-strip=0", "--workers=4", candidate, archive])
++        report = verify(reader, fsck, stock, candidate, transforms, source_notice, stage_inputs)
++        os.link(candidate, output)
++        return report
++
++
++def audit_stage(reader: Path, stock: Path, stage: Path, transforms: tuple[Path, Path],
++                source_notice: Path | None = None, stage_inputs=None) -> None:
++    """Check guarded camera bytes and, when selected, the exact source NOTICE input."""
++    entries = image.inventory(reader, stock)
++    changed = replacements(reader, stock, entries, transforms, source_notice)
++    if stage_inputs is not None:
++        image.require(stage.resolve() == stage_inputs.stage.resolve(), "different ODM stage inputs")
++        check_product_stage(reader, stock, entries, changed, stage_inputs, source_notice)
++        return
++    # Direct image callers can omit product metadata. The CLI supplies the
++    # complete product group whenever a stage is selected.
++    if not stage.exists() and not stage.is_symlink():
++        return
++    image.require(stage.is_dir() and not stage.is_symlink(), "ODM staging is not a real directory")
++    for path, staged in tf.logical_paths(stage).items():
++        image.require(path in entries, f"unapproved ODM staged path: {os.fsdecode(path)}")
++        expected = entries[path]
++        kind = stat.S_IFMT(staged.lstat().st_mode)
++        image.require(kind == stat.S_IFMT(expected["mode"]), "ODM staged inode type differs")
++        if path == image.NOTICE and source_notice is not None:
++            image.require(staged.read_bytes() == source_notice.read_bytes(),
++                          "ODM staged source NOTICE differs")
++        elif path in changed:
++            image.require(staged.read_bytes() == changed[path], "ODM staged camera provider differs")
++        elif kind == stat.S_IFLNK:
++            target = image.run([reader, "cat", stock, os.fsdecode(path)]).stdout
++            image.require(os.fsencode(os.readlink(staged)) == target, "ODM staged symlink differs")
++        elif kind == stat.S_IFREG:
++            with staged.open("rb") as stream:
++                tf.compare_stream_to_image(reader, stock, path, stream, expected["size"])
+diff --git a/popsicle/odm_avb.py b/popsicle/odm_avb.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/odm_avb.py
+@@ -0,0 +1,39 @@
++# SPDX-License-Identifier: MIT
++"""The fixed ODM cohort using the shared strict AVB, expected-key and FEC gates."""
++from __future__ import annotations
++
++if __package__:
++    from . import vendor_avb as shared
++else:
++    import vendor_avb as shared
++
++COHORT = {
++    "com.android.build.odm.os_version": b"ro.odm.build.version.release",
++    "com.android.build.odm.fingerprint": b"ro.odm.build.fingerprint",
++}
++CONTRACT = {"partition": "odm", "cohort": COHORT}
++
++
++def parse(path):
++    return shared.parse(path, **CONTRACT)
++
++
++def original_properties(reader, stock):
++    return shared.original_properties(reader, stock, **CONTRACT)
++
++
++def verify(reader, stock, raw, sealed, key, public_key, algorithm, fec):
++    return shared.verify(reader, stock, raw, sealed, key, public_key, algorithm, fec, **CONTRACT)
++
++
++def seal(reader, stock, raw, output, info, avb, key, public_key, algorithm, fec):
++    return shared.seal(reader, stock, raw, output, info, avb, key, public_key, algorithm, fec,
++                       **CONTRACT)
++
++
++def verify_info(sealed, data, key, public_key, fec):
++    return shared.verify_info(sealed, data, key, public_key, fec, **CONTRACT)
++
++
++def sync_info(sealed, path, key, public_key, fec):
++    return shared.sync_info(sealed, path, key, public_key, fec, **CONTRACT)
+diff --git a/popsicle/odm_target_files.py b/popsicle/odm_target_files.py
+new file mode 100644
+--- /dev/null
++++ b/popsicle/odm_target_files.py
+@@ -0,0 +1,51 @@
++# SPDX-License-Identifier: MIT
++"""Complete ODM directory and ZIP views tied to the same verified sealed image."""
++from __future__ import annotations
++
++from pathlib import Path
++import zipfile
++
++if __package__:
++    from . import derive_vendor as image, odm_avb, odm_image, vendor_target_files as tf
++else:
++    import derive_vendor as image
++    import odm_avb
++    import odm_image
++    import vendor_target_files as tf
++
++
++def verify_source(reader, fsck, stock, raw, sealed, transforms, key, public_key, algorithm, fec,
++                  source_notice=None, stage_inputs=None):
++    report = odm_image.verify(reader, fsck, stock, raw, transforms, source_notice, stage_inputs)
++    report["avb"] = odm_avb.verify(reader, stock, raw, sealed, key, public_key, algorithm, fec)
++    return report
++
++
++def export(reader, fsck, stock, raw, sealed, transforms, key, public_key, algorithm, fec,
++           target_files: Path, stage: Path, source_notice=None, stage_inputs=None):
++    report = verify_source(reader, fsck, stock, raw, sealed, transforms, key, public_key,
++                           algorithm, fec, source_notice, stage_inputs)
++    odm_image.audit_stage(reader, stock, stage, transforms, source_notice, stage_inputs)
++    # This creates only the complete ODM view and its metadata. The existing Make
++    # image provider must supply IMAGES/odm.img before the final publication gate.
++    tf.export(reader, sealed, target_files, partition="odm")
++    return report
++
++
++def verify(reader, fsck, stock, raw, sealed, transforms, key, public_key, algorithm, fec,
++           stage: Path, target_files: Path | None = None, target_files_zip: Path | None = None,
++           source_notice=None, stage_inputs=None):
++    image.require(bool(target_files) != bool(target_files_zip),
++                  "select exactly one ODM target-files directory or ZIP")
++    report = verify_source(reader, fsck, stock, raw, sealed, transforms, key, public_key,
++                           algorithm, fec, source_notice, stage_inputs)
++    odm_image.audit_stage(reader, stock, stage, transforms, source_notice, stage_inputs)
++    if target_files is not None:
++        tf.verify_directory(reader, sealed, target_files, partition="odm")
++        info = (target_files / "META/misc_info.txt").read_bytes()
++    else:
++        tf.verify_zip(reader, sealed, target_files_zip, partition="odm")
++        with zipfile.ZipFile(target_files_zip) as archive:
++            info = archive.read("META/misc_info.txt")
++    odm_avb.verify_info(sealed, info, key, public_key, fec)
++    return report

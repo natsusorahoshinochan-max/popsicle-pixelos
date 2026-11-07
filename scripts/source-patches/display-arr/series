@@ -1,0 +1,8 @@
+# Fixed PixelOS ROM production patch order.
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0001-default-mode-and-capability-sync.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0002-preserve-default-mode-on-rate-tie.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0003-resolve-capability-on-mode-completion.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0004-refresh-unresolved-mode-transition.patch
+frameworks/native 68b75739134f1df4c7d4671aea3f0457a0b182b2 0005-native-arr-mode-capability-query.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0006-display-config-arr-preference.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0007-route-aidl-and-scope-idle-config.patch

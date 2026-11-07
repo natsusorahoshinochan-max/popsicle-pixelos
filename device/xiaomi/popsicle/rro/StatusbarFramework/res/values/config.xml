@@ -1,0 +1,8 @@
+<resources>
+<string-array name="config_displayUniqueIdArray" translatable="false"><item>local:4630946457447247251</item><item>local:4630946457447247252</item></string-array>
+<string-array name="config_displayCutoutPathArray" translatable="false"><item>M 0,0 H -34 V 144 H 34 V 0 H 0 Z</item><item></item></string-array>
+<string-array name="config_displayCutoutApproximationRectArray" translatable="false"><item>M 0,0 H -34 V 144 H 34 V 0 H 0 Z</item><item></item></string-array>
+<array name="config_roundedCornerRadiusArray"><item>170px</item><item>101px</item></array>
+<array name="config_roundedCornerTopRadiusArray"><item>170px</item><item>101px</item></array>
+<array name="config_roundedCornerBottomRadiusArray"><item>170px</item><item>101px</item></array>
+</resources>

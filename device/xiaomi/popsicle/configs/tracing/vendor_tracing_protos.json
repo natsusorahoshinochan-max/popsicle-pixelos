@@ -1,0 +1,15 @@
+{
+  "extensions": [
+    {
+      "scope": "perfetto.protos.TrackEvent",
+      "range": [5000, 8999],
+      "allocations": [
+        {
+          "name": "unallocated",
+          "range": [5000, 8999],
+          "description": "No TrackEvent extension schemas supplied by this product's fixed vendor inputs"
+        }
+      ]
+    }
+  ]
+}

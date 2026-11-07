@@ -1,0 +1,57 @@
+diff --git a/core/java/android/view/WindowManager.java b/core/java/android/view/WindowManager.java
+--- a/core/java/android/view/WindowManager.java
++++ b/core/java/android/view/WindowManager.java
+@@ -3483,6 +3483,16 @@
+         }, formatToHexString = true)
+         @Flags
+         public int flags;
++
++        /**
++         * The OEM rear application handles double tap instead of a system gesture handler.
++         * The original application also uses this field to discover that capability.
++         * @hide
++         */
++        public static final int MIUI_FLAG_DISABLE_SUBSCREEN_DOUBLE_TAP = 0x100;
++
++        /** @hide */
++        public int miuiFlags;
+ 
+         /**
+          * By default, wallpapers are sent new offsets when the wallpaper is scrolled. Wallpapers
+@@ -5481,6 +5491,7 @@
+             out.writeInt(y);
+             out.writeInt(type);
+             out.writeInt(flags);
++            out.writeInt(miuiFlags);
+             out.writeInt(privateFlags);
+             out.writeInt(softInputMode);
+             out.writeInt(layoutInDisplayCutoutMode);
+@@ -5560,6 +5571,7 @@
+             y = in.readInt();
+             type = in.readInt();
+             flags = in.readInt();
++            miuiFlags = in.readInt();
+             privateFlags = in.readInt();
+             softInputMode = in.readInt();
+             layoutInDisplayCutoutMode = in.readInt();
+@@ -5728,6 +5740,10 @@
+                 flags = o.flags;
+                 changes |= FLAGS_CHANGED;
+             }
++            if (miuiFlags != o.miuiFlags) {
++                miuiFlags = o.miuiFlags;
++                changes |= FLAGS_CHANGED;
++            }
+             if (privateFlags != o.privateFlags) {
+                 privateFlags = o.privateFlags;
+                 changes |= PRIVATE_FLAGS_CHANGED;
+@@ -6147,6 +6163,9 @@
+             sb.append(System.lineSeparator());
+             sb.append(prefix).append("  fl=").append(
+                     ViewDebug.flagsToString(LayoutParams.class, "flags", flags));
++            if (miuiFlags != 0) {
++                sb.append(" miuiFlags=0x").append(Integer.toHexString(miuiFlags));
++            }
+             if (privateFlags != 0) {
+                 sb.append(System.lineSeparator());
+                 sb.append(prefix).append("  pfl=").append(ViewDebug.flagsToString(

@@ -1,0 +1,25 @@
+--- a/services/core/java/com/android/server/wm/RootWindowContainer.java
++++ b/services/core/java/com/android/server/wm/RootWindowContainer.java
+@@ -1757,8 +1757,20 @@
+         final boolean supportMultipleInstance = homeInfo.launchMode != LAUNCH_SINGLE_TASK
+                 && homeInfo.launchMode != LAUNCH_SINGLE_INSTANCE;
+         if (!supportMultipleInstance) {
+-            // Can't launch home on secondary displays if it requested to be single instance.
+-            return false;
++            // The original rear Home is a singleton. Keep the general secondary
++            // Home restriction, but support that contract on its dedicated
++            // physical display after the normal user/task/launch policy checks.
++            final DisplayContent rearDisplay = taskDisplayArea != null
++                    ? taskDisplayArea.getDisplayContent() : null;
++            if (rearDisplay == null || !com.android.internal.display.OemRearDisplay.isRearDisplay(
++                    mService.mContext.getResources(), rearDisplay.getDisplayInfo())) {
++                return false;
++            }
++            final ComponentName rearHome = ComponentName.unflattenFromString(
++                    mService.mContext.getResources().getString(
++                            com.android.internal.R.string.config_oemRearHomeComponent));
++            return rearHome != null && rearHome.getPackageName().equals(homeInfo.packageName)
++                    && rearHome.getClassName().equals(homeInfo.name);
+         }
+ 
+         return true;

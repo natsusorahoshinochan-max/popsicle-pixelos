@@ -1,0 +1,6 @@
+id=popsicle-camera-dng
+name=Popsicle Camera DNG Save Repair
+version=0.3
+versionCode=3
+author=Kanoe
+description=UltraRAW per-capture AnalogBalance/AsShotNeutral correction. PixelOS seven-fixes ROM: per-capture full-resolution remosaic DNG geometry and OS4 lossless RAW tile writing, with save integrity, thumbnail and dynamic white-level adaptations.

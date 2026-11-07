@@ -1,0 +1,350 @@
+diff --git a/boot/hiddenapi/hiddenapi-unsupported.txt b/boot/hiddenapi/hiddenapi-unsupported.txt
+--- a/boot/hiddenapi/hiddenapi-unsupported.txt
++++ b/boot/hiddenapi/hiddenapi-unsupported.txt
+@@ -258,3 +258,7 @@
+ Lcom/android/internal/view/IInputMethodManager$Stub$Proxy;-><init>(Landroid/os/IBinder;)V
+ Lcom/android/internal/view/IInputMethodManager$Stub;->asInterface(Landroid/os/IBinder;)Lcom/android/internal/view/IInputMethodManager;
+ Lcom/android/internal/widget/ILockSettings$Stub;->asInterface(Landroid/os/IBinder;)Lcom/android/internal/widget/ILockSettings;
++Landroid/view/IScreenStateListener$Stub;-><init>()V
++Landroid/view/IScreenStateListener$Stub;->asInterface(Landroid/os/IBinder;)Landroid/view/IScreenStateListener;
++Landroid/view/IWindowManager$Stub$Proxy;->registerScreenStateListener(Landroid/view/IScreenStateListener;)V
++Landroid/view/IWindowManager$Stub$Proxy;->unregisterScreenStateListener(Landroid/view/IScreenStateListener;)V
+diff --git a/core/java/android/view/IScreenStateListener.aidl b/core/java/android/view/IScreenStateListener.aidl
+new file mode 100644
+--- /dev/null
++++ b/core/java/android/view/IScreenStateListener.aidl
+@@ -0,0 +1,23 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package android.view;
++
++/** @hide */
++oneway interface IScreenStateListener {
++    @UnsupportedAppUsage
++    void onScreenTurningOff(int displayId);
++}
+diff --git a/core/java/android/view/IWindowManager.aidl b/core/java/android/view/IWindowManager.aidl
+--- a/core/java/android/view/IWindowManager.aidl
++++ b/core/java/android/view/IWindowManager.aidl
+@@ -73,6 +73,7 @@
+ import android.window.ConfigurationChangeSetting;
+ import android.window.IGlobalDragListener;
+ import android.window.IScreenCaptureCallback;
++import android.view.IScreenStateListener;
+ import android.window.IScreenRecordingCallback;
+ import android.window.ISurfaceSyncGroupCompletedListener;
+ import android.window.ITaskFpsCallback;
+@@ -1252,4 +1253,13 @@
+      * Returns whether the display with {@code displayId} ignores orientation request.
+      */
+     boolean getIgnoreOrientationRequest(int displayId);
++
++    /** Register the OEM rear display's actual screen-turning-off callback. */
++    @UnsupportedAppUsage
++    @EnforcePermission("MANAGE_ACTIVITY_TASKS")
++    void registerScreenStateListener(IScreenStateListener listener);
++
++    @UnsupportedAppUsage
++    @EnforcePermission("MANAGE_ACTIVITY_TASKS")
++    void unregisterScreenStateListener(IScreenStateListener listener);
+ }
+diff --git a/core/java/com/android/internal/display/OemRearDisplay.java b/core/java/com/android/internal/display/OemRearDisplay.java
+new file mode 100644
+--- /dev/null
++++ b/core/java/com/android/internal/display/OemRearDisplay.java
+@@ -0,0 +1,38 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.internal.display;
++
++import android.content.res.Resources;
++import android.view.Display;
++import android.view.DisplayInfo;
++
++import com.android.internal.R;
++
++/** Device configuration for the dedicated built-in rear display. */
++public final class OemRearDisplay {
++    private OemRearDisplay() {}
++
++    public static boolean isConfigured(Resources resources) {
++        return !resources.getString(R.string.config_oemRearDisplayUniqueId).isEmpty();
++    }
++
++    public static boolean isRearDisplay(Resources resources, DisplayInfo info) {
++        return info != null && info.type == Display.TYPE_INTERNAL
++                && info.displayId != Display.DEFAULT_DISPLAY && isConfigured(resources)
++                && resources.getString(R.string.config_oemRearDisplayUniqueId).equals(info.uniqueId);
++    }
++}
+diff --git a/core/java/miui/os/DeviceFeature.java b/core/java/miui/os/DeviceFeature.java
+new file mode 100644
+--- /dev/null
++++ b/core/java/miui/os/DeviceFeature.java
+@@ -0,0 +1,38 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package miui.os;
++
++import android.compat.annotation.UnsupportedAppUsage;
++import android.content.res.Resources;
++
++import com.android.internal.R;
++import com.android.internal.display.OemRearDisplay;
++
++/**
++ * Device-declared rear-assistant capability used by the official App.
++ * @hide
++ */
++public final class DeviceFeature {
++    private DeviceFeature() {}
++
++    @UnsupportedAppUsage
++    public static boolean isSupportRearSmartAssistant() {
++        Resources resources = Resources.getSystem();
++        return OemRearDisplay.isConfigured(resources)
++                && resources.getBoolean(R.bool.config_oemRearSmartAssistantSupported);
++    }
++}
+diff --git a/core/java/miui/util/MiuiMultiDisplayTypeInfo.java b/core/java/miui/util/MiuiMultiDisplayTypeInfo.java
+new file mode 100644
+--- /dev/null
++++ b/core/java/miui/util/MiuiMultiDisplayTypeInfo.java
+@@ -0,0 +1,35 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package miui.util;
++
++import android.compat.annotation.UnsupportedAppUsage;
++import android.content.res.Resources;
++
++import com.android.internal.display.OemRearDisplay;
++
++/**
++ * Official App hardware capability entry point.
++ * @hide
++ */
++public final class MiuiMultiDisplayTypeInfo {
++    private MiuiMultiDisplayTypeInfo() {}
++
++    @UnsupportedAppUsage
++    public static boolean isIndependentRearDevice() {
++        return OemRearDisplay.isConfigured(Resources.getSystem());
++    }
++}
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -8085,4 +8085,8 @@
+     <bool name="config_disable_video_capability_when_wfc_off">false</bool>
+     <!-- Enable only for a device using Xiaomi's verified 2.0 ultrasonic polling ABI. -->
+     <bool name="config_xiaomiFingerprintTouchPolling">false</bool>
++    <!-- Empty on devices without a dedicated independent rear display. -->
++    <string name="config_oemRearDisplayUniqueId" translatable="false"></string>
++    <string name="config_oemRearHomeComponent" translatable="false"></string>
++    <bool name="config_oemRearSmartAssistantSupported">false</bool>
+ </resources>
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -6629,4 +6629,7 @@
+   <!-- Disable the Video Capability over IWLAN when Wi-Fi Calling is turned off  -->
+   <java-symbol type="bool" name="config_disable_video_capability_when_wfc_off" />
+   <java-symbol type="bool" name="config_xiaomiFingerprintTouchPolling" />
+-  </resources>
++      <java-symbol type="string" name="config_oemRearDisplayUniqueId" />
++    <java-symbol type="string" name="config_oemRearHomeComponent" />
++    <java-symbol type="bool" name="config_oemRearSmartAssistantSupported" />
++</resources>
+diff --git a/services/core/java/com/android/server/wm/DisplayWindowSettings.java b/services/core/java/com/android/server/wm/DisplayWindowSettings.java
+--- a/services/core/java/com/android/server/wm/DisplayWindowSettings.java
++++ b/services/core/java/com/android/server/wm/DisplayWindowSettings.java
+@@ -306,7 +306,9 @@
+         final SettingsProvider.SettingsEntry settings = mSettingsProvider.getSettings(displayInfo);
+         return settings.mIsHomeSupported != null
+                 ? settings.mIsHomeSupported
+-                : shouldShowSystemDecorsLocked(dc);
++                : shouldShowSystemDecorsLocked(dc)
++                        || com.android.internal.display.OemRearDisplay.isRearDisplay(
++                                mService.mContext.getResources(), displayInfo);
+     }
+ 
+     void setHomeSupportedOnDisplayLocked(@NonNull String displayUniqueId, int displayType,
+diff --git a/services/core/java/com/android/server/wm/OemScreenStateController.java b/services/core/java/com/android/server/wm/OemScreenStateController.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/wm/OemScreenStateController.java
+@@ -0,0 +1,56 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.wm;
++
++import android.os.Handler;
++import android.os.RemoteCallbackList;
++import android.os.RemoteException;
++import android.util.Slog;
++import android.view.IScreenStateListener;
++
++/** Serializes registrations and real rear screen-off events outside WM/display locks. */
++final class OemScreenStateController {
++    private final Handler mHandler;
++    private final RemoteCallbackList<IScreenStateListener> mListeners = new RemoteCallbackList<>();
++
++    OemScreenStateController(Handler handler) { mHandler = handler; }
++
++    void register(IScreenStateListener listener) {
++        if (listener != null) mHandler.post(() -> mListeners.register(listener));
++    }
++
++    void unregister(IScreenStateListener listener) {
++        if (listener != null) mHandler.post(() -> mListeners.unregister(listener));
++    }
++
++    void screenTurningOff(int displayId) {
++        mHandler.post(() -> {
++            int count = mListeners.beginBroadcast();
++            try {
++                for (int i = 0; i < count; i++) {
++                    try {
++                        mListeners.getBroadcastItem(i).onScreenTurningOff(displayId);
++                    } catch (RemoteException | RuntimeException e) {
++                        Slog.w("OemScreenState", "Screen state listener failed", e);
++                    }
++                }
++            } finally {
++                mListeners.finishBroadcast();
++            }
++        });
++    }
++}
+diff --git a/services/core/java/com/android/server/wm/RootWindowContainer.java b/services/core/java/com/android/server/wm/RootWindowContainer.java
+--- a/services/core/java/com/android/server/wm/RootWindowContainer.java
++++ b/services/core/java/com/android/server/wm/RootWindowContainer.java
+@@ -1525,6 +1525,23 @@
+                     "resolveSecondaryHomeActivity: Should not be default task container");
+         }
+ 
++        DisplayContent rearDisplay = taskDisplayArea.getDisplayContent();
++        if (rearDisplay != null && com.android.internal.display.OemRearDisplay.isRearDisplay(
++                mService.mContext.getResources(), rearDisplay.getDisplayInfo())) {
++            ComponentName component = ComponentName.unflattenFromString(
++                    mService.mContext.getResources().getString(
++                            com.android.internal.R.string.config_oemRearHomeComponent));
++            if (component != null) {
++                Intent rearIntent = new Intent(Intent.ACTION_MAIN)
++                        .addCategory(Intent.CATEGORY_SECONDARY_HOME).setComponent(component);
++                ActivityInfo rearHome = resolveHomeActivity(userId, rearIntent);
++                if (rearHome != null && canStartHomeOnDisplayArea(rearHome, taskDisplayArea,
++                        false /* allowInstrumenting */)) {
++                    return Pair.create(rearHome, rearIntent);
++                }
++            }
++        }
++
+         Intent homeIntent = mService.getHomeIntent();
+         ActivityInfo aInfo = resolveHomeActivity(userId, homeIntent);
+         boolean lookForSecondaryHomeActivityInPrimaryHomePackage = aInfo != null;
+diff --git a/services/core/java/com/android/server/wm/WindowManagerService.java b/services/core/java/com/android/server/wm/WindowManagerService.java
+--- a/services/core/java/com/android/server/wm/WindowManagerService.java
++++ b/services/core/java/com/android/server/wm/WindowManagerService.java
+@@ -3660,8 +3660,30 @@
+         }
+     }
+ 
++    private final OemScreenStateController mOemScreenStateController =
++            new OemScreenStateController(com.android.server.FgThread.getHandler());
++
++    @Override
++    public void registerScreenStateListener(android.view.IScreenStateListener listener) {
++        registerScreenStateListener_enforcePermission();
++        mOemScreenStateController.register(listener);
++    }
++
++    @Override
++    public void unregisterScreenStateListener(android.view.IScreenStateListener listener) {
++        unregisterScreenStateListener_enforcePermission();
++        mOemScreenStateController.unregister(listener);
++    }
++
+     @Override
+     public void screenTurningOff(int displayId, ScreenOffListener listener) {
++        synchronized (mGlobalLock) {
++            DisplayContent display = mRoot.getDisplayContent(displayId);
++            if (display != null && com.android.internal.display.OemRearDisplay.isRearDisplay(
++                    mContext.getResources(), display.getDisplayInfo())) {
++                mOemScreenStateController.screenTurningOff(displayId);
++            }
++        }
+         mTaskSnapshotController.screenTurningOff(displayId, listener);
+     }
+ 

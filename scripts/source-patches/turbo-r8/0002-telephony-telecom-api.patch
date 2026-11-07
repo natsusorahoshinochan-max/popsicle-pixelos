@@ -1,0 +1,20 @@
+--- a/framework/Android.bp
++++ b/framework/Android.bp
+@@ -81,6 +81,8 @@
+     ],
+     libs: [
+         "framework-connectivity.stubs.module_lib",
++        // TelephonyManager in the platform API references PhoneAccountHandle.
++        "framework-telecom.stubs.module_lib",
+         "androidx.annotation_annotation",
+     ],
+     static_libs: [
+@@ -117,6 +119,8 @@
+     ],
+     libs: [
+         "framework-connectivity.stubs.module_lib",
++        // TelephonyManager in the platform API references PhoneAccountHandle.
++        "framework-telecom.stubs.module_lib",
+         "androidx.annotation_annotation",
+     ],
+     static_libs: [

@@ -1,0 +1,51 @@
+--- a/java/java.go
++++ b/java/java.go
+@@ -3688,6 +3688,10 @@
+ 
+ 	// set the name of the output
+ 	Stem *string
++
++	// Opt in as a leaf runtime uses-library. This does not provide class headers
++	// or make a DEX archive a valid javac/R8 compile dependency.
++	Provides_uses_lib *string
+ }
+ 
+ type DexImport struct {
+@@ -3781,14 +3785,25 @@
+ 
+ 	j.dexpreopt(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), dexOutputFile)
+ 
++	var installed android.Path
+ 	if apexInfo.IsForPlatform() {
+-		ctx.InstallFile(android.PathForModuleInstall(ctx, "framework"),
++		installed = ctx.InstallFile(android.PathForModuleInstall(ctx, "framework"),
+ 			j.Stem()+".jar", dexOutputFile)
+ 	}
+ 
+ 	javaInfo := &JavaInfo{}
+ 	setExtraJavaInfo(ctx, j, javaInfo)
+ 	javaInfo.BootDexJarPath = j.dexJarFile
++	if name := j.properties.Provides_uses_lib; name != nil {
++		if *name == "" || installed == nil {
++			ctx.PropertyErrorf("provides_uses_lib", "requires a nonempty name and a platform installation")
++			return
++		}
++		javaInfo.UsesLibraryDependencyInfo = &UsesLibraryDependencyInfo{
++			DexJarInstallPath: installed,
++		}
++		javaInfo.ProvidesUsesLibInfo = &ProvidesUsesLibInfo{ProvidesUsesLib: name}
++	}
+ 
+ 	android.SetProvider(ctx, JavaInfoProvider, javaInfo)
+ 
+@@ -3808,8 +3823,8 @@
+ 
+ // dex_import imports a `.jar` file containing classes.dex files.
+ //
+-// A dex_import module cannot be used as a dependency of a java_* or android_* module, it can only be installed
+-// to the device.
++// A dex_import has no compile-time classes. An explicitly named leaf runtime library
++// can supply uses-library/dexpreopt context to a prebuilt APK, using its real installed DEX.
+ func DexImportFactory() android.Module {
+ 	module := &DexImport{}
+ 

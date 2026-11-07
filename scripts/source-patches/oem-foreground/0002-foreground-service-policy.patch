@@ -1,0 +1,30 @@
+diff --git a/build/soong/service_fuzzer_bindings.go b/build/soong/service_fuzzer_bindings.go
+--- a/build/soong/service_fuzzer_bindings.go
++++ b/build/soong/service_fuzzer_bindings.go
+@@ -23,6 +23,7 @@
+ 
+ var (
+ 	ServiceFuzzerBindings = map[string][]string{
++		"ProcessManager": EXCEPTION_NO_FUZZER,
+ 		"android.hardware.audio.core.IConfig/default":                                        EXCEPTION_NO_FUZZER,
+ 		"android.hardware.audio.core.IModule/default":                                        EXCEPTION_NO_FUZZER,
+ 		"android.hardware.audio.core.IModule/a2dp":                                           EXCEPTION_NO_FUZZER,
+diff --git a/private/oem_foreground.te b/private/oem_foreground.te
+new file mode 100644
+--- /dev/null
++++ b/private/oem_foreground.te
+@@ -0,0 +1,4 @@
++# Narrow foreground callback service; Binder also checks platform signature and package identity.
++type oem_foreground_service, system_server_service, service_manager_type;
++add_service(system_server, oem_foreground_service)
++allow { platform_app priv_app system_app } oem_foreground_service:service_manager find;
+diff --git a/private/service_contexts b/private/service_contexts
+--- a/private/service_contexts
++++ b/private/service_contexts
+@@ -575,3 +575,6 @@
+ wifi_mainline_supplicant                  u:object_r:wifi_mainline_supplicant_service:s0
+ window                                    u:object_r:window_service:s0
+ *                                         u:object_r:default_android_service:s0
++
++# Official camera and rear-display foreground listener compatibility service.
++ProcessManager                            u:object_r:oem_foreground_service:s0

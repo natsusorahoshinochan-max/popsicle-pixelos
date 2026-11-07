@@ -1,0 +1,78 @@
+diff --git a/packages/SystemUI/src/com/android/systemui/subscreen/OemRearService.kt b/packages/SystemUI/src/com/android/systemui/subscreen/OemRearService.kt
+--- a/packages/SystemUI/src/com/android/systemui/subscreen/OemRearService.kt
++++ b/packages/SystemUI/src/com/android/systemui/subscreen/OemRearService.kt
+@@ -111,8 +111,7 @@
+                 if (initial != null) {
+                     val activeKeys = active.filter { allowed(it.userId) }.map { it.key }.toSet()
+                     notices.keys.retainAll(activeKeys)
+-                    initial.filter { allowed(it.user) && !it.extras.isEmpty }
+-                        .forEach { notices[it.key] = it }
++                    initial.filter { allowed(it.user) }.forEach { updateNotice(it) }
+                 }
+                 mediaState.retainKeys(entries.keys)
+                 entries.forEach { (key, data) ->
+@@ -134,15 +133,33 @@
+ 
+     private fun allowed(id: Int) = id == UserHandle.USER_ALL || id in profiles
+ 
++    // Only decoded snapshots reach this method; a failed decode leaves the old state intact.
++    private fun updateNotice(notice: Notice) {
++        if (notice.extras.isEmpty) notices.remove(notice.key) else notices[notice.key] = notice
++    }
++
++    private fun syncNotice(binder: IBinder, key: String) {
++        val notice = notices[key]
++        if (notice != null) {
++            OemRearServiceProtocol.notification(binder, notice.id, notice.pkg,
++                key, notice.extras, false)
++            delivered[key] = notice
++        } else {
++            val previous = delivered[key] ?: return
++            OemRearServiceProtocol.notification(binder, previous.id, previous.pkg,
++                key, null, true)
++            delivered.remove(key)
++        }
++    }
++
+     private val notificationHandler = object : NotificationListener.NotificationHandler {
+         override fun onNotificationPosted(sbn: StatusBarNotification, ranking: RankingMap) {
+             val owner = userTracker.userId
+             val notice = snapshot(sbn) ?: return
+             worker.post {
+-                if (user != owner || !allowed(notice.user) || notice.extras.isEmpty) return@post
+-                notices[notice.key] = notice
+-                send { OemRearServiceProtocol.notification(it, notice.id, notice.pkg,
+-                    notice.key, notice.extras, false); delivered[notice.key] = notice }
++                if (user != owner || !allowed(notice.user)) return@post
++                updateNotice(notice)
++                send { syncNotice(it, notice.key) }
+             }
+         }
+         override fun onNotificationRemoved(sbn: StatusBarNotification, ranking: RankingMap) =
+@@ -153,8 +170,7 @@
+             worker.post {
+                 if (user != owner || !allowed(sbn.userId)) return@post
+                 notices.remove(sbn.key)
+-                send { OemRearServiceProtocol.notification(it, sbn.id, sbn.packageName,
+-                    sbn.key, null, true); delivered.remove(sbn.key) }
++                send { syncNotice(it, sbn.key) }
+             }
+         }
+         override fun onNotificationRankingUpdate(ranking: RankingMap) {}
+@@ -218,14 +234,8 @@
+ 
+     private fun flush() {
+         send { binder ->
+-            delivered.values.toList().filter { it.key !in notices }.forEach {
+-                OemRearServiceProtocol.notification(binder, it.id, it.pkg, it.key, null, true)
+-                delivered.remove(it.key)
+-            }
+-            notices.values.forEach {
+-                OemRearServiceProtocol.notification(binder, it.id, it.pkg, it.key, it.extras, false)
+-                delivered[it.key] = it
+-            }
++            delivered.keys.toList().filter { it !in notices }.forEach { syncNotice(binder, it) }
++            notices.keys.forEach { syncNotice(binder, it) }
+             OemRearServiceProtocol.media(binder, mediaState.top())
+         }
+     }

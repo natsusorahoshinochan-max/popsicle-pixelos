@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <!-- Main panel microns per physical pixel: 25400 / 419.25723 xdpi.
+         The logical density (480 dpi) is not the physical pixel density. -->
+    <item name="pixel_pitch" format="float" type="dimen">60.5833</item>
+</resources>

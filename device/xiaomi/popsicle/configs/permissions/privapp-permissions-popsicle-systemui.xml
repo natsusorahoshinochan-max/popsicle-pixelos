@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<permissions>
+    <!-- SystemUI owns and observes the original rear assistant's Focus settings. -->
+    <privapp-permissions package="com.android.systemui">
+        <permission name="com.android.systemui.permission.NOTIFICATION" />
+    </privapp-permissions>
+</permissions>

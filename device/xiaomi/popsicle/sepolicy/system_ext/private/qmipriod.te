@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# The reused stock vendor policy is from a user build and omits these
+# engineering-build logging permissions from the SM8750 QCOM policy.
+userdebug_or_eng(`
+  type vendor_qmipriod, domain;
+  type vendor_qmipriod_data_file, file_type, data_file_type;
+
+  allow vendor_qmipriod vendor_qmipriod_data_file:dir rw_dir_perms;
+  allow vendor_qmipriod vendor_qmipriod_data_file:file create_file_perms;
+')

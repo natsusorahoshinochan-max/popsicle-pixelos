@@ -1,0 +1,1431 @@
+diff --git a/core/Makefile b/core/Makefile
+index 3682461..5eff933 100644
+--- a/core/Makefile
++++ b/core/Makefile
+@@ -1051,6 +1051,13 @@ ifdef BOARD_PREBUILT_DTBOIMAGE
+ INSTALLED_DTBOIMAGE_TARGET := $(PRODUCT_OUT)/dtbo.img
+ 
+ ifeq ($(BOARD_AVB_ENABLE),true)
++ifneq ($(filter dtbo,$(BOARD_AVB_PRESERVE_PREBUILT_IMAGES)),)
++$(INSTALLED_DTBOIMAGE_TARGET): $(BOARD_PREBUILT_DTBOIMAGE) $(AVBTOOL) $(HOST_OUT_EXECUTABLES)/verify_prebuilt_boot_image
++	cp $(BOARD_PREBUILT_DTBOIMAGE) $@
++	$(HOST_OUT_EXECUTABLES)/verify_prebuilt_boot_image \
++	    --avbtool $(AVBTOOL) --image $@ --partition dtbo --partition-size $(BOARD_DTBOIMG_PARTITION_SIZE)
++	cmp $(BOARD_PREBUILT_DTBOIMAGE) $@
++else
+ $(INSTALLED_DTBOIMAGE_TARGET): $(BOARD_PREBUILT_DTBOIMAGE) $(AVBTOOL) $(BOARD_AVB_DTBO_KEY_PATH)
+ 	cp $(BOARD_PREBUILT_DTBOIMAGE) $@
+ 	chmod +w $@
+@@ -1061,6 +1068,8 @@ $(INSTALLED_DTBOIMAGE_TARGET): $(BOARD_PREBUILT_DTBOIMAGE) $(AVBTOOL) $(BOARD_AV
+ 	    --partition_name dtbo $(INTERNAL_AVB_DTBO_SIGNING_ARGS) \
+ 	    $(BOARD_AVB_DTBO_ADD_HASH_FOOTER_ARGS)
+ 
++endif # preserve prebuilt AVB
++
+ $(call declare-1p-container,$(INSTALLED_DTBOIMAGE_TARGET),)
+ $(call declare-container-license-deps,$(INSTALLED_DTBOIMAGE_TARGET),$(BOARD_PREBUILT_DTBOIMAGE),$(PRODUCT_OUT)/:/)
+ 
+@@ -1419,6 +1428,13 @@ INTERNAL_PREBUILT_BOOTIMAGE := $(BOARD_PREBUILT_BOOTIMAGE)
+ INSTALLED_BOOTIMAGE_TARGET := $(PRODUCT_OUT)/boot.img
+ 
+ ifeq ($(BOARD_AVB_ENABLE),true)
++ifneq ($(filter boot,$(BOARD_AVB_PRESERVE_PREBUILT_IMAGES)),)
++$(INSTALLED_BOOTIMAGE_TARGET): $(INTERNAL_PREBUILT_BOOTIMAGE) $(AVBTOOL) $(HOST_OUT_EXECUTABLES)/verify_prebuilt_boot_image
++	cp $(INTERNAL_PREBUILT_BOOTIMAGE) $@
++	$(HOST_OUT_EXECUTABLES)/verify_prebuilt_boot_image \
++	    --avbtool $(AVBTOOL) --image $@ --partition boot --partition-size $(BOARD_BOOTIMAGE_PARTITION_SIZE)
++	cmp $(INTERNAL_PREBUILT_BOOTIMAGE) $@
++else
+ $(INSTALLED_BOOTIMAGE_TARGET): PRIVATE_WORKING_DIR := $(call intermediates-dir-for,PACKAGING,prebuilt_bootimg)
+ $(INSTALLED_BOOTIMAGE_TARGET): $(INTERNAL_PREBUILT_BOOTIMAGE) $(AVBTOOL) $(BOARD_AVB_BOOT_KEY_PATH) $(UNPACK_BOOTIMG)
+ 	cp $(INTERNAL_PREBUILT_BOOTIMAGE) $@
+@@ -1431,6 +1447,8 @@ $(INSTALLED_BOOTIMAGE_TARGET): $(INTERNAL_PREBUILT_BOOTIMAGE) $(AVBTOOL) $(BOARD
+ 	    --partition_name boot $(INTERNAL_AVB_BOOT_SIGNING_ARGS) \
+ 	    $(BOARD_AVB_BOOT_ADD_HASH_FOOTER_ARGS)
+ 
++endif # preserve prebuilt AVB
++
+ 
+ $(call declare-container-license-metadata,$(INSTALLED_BOOTIMAGE_TARGET),SPDX-license-identifier-GPL-2.0-only SPDX-license-identifier-Apache-2.0,restricted notice,$(BUILD_SYSTEM)/LINUX_KERNEL_COPYING build/soong/licenses/LICENSE,"Boot Image",bool)
+ $(call declare-container-license-deps,$(INSTALLED_BOOTIMAGE_TARGET),$(INTERNAL_PREBUILT_BOOTIMAGE),$(PRODUCT_OUT)/:/)
+@@ -1774,6 +1792,13 @@ INTERNAL_PREBUILT_VENDOR_BOOTIMAGE := $(BOARD_PREBUILT_VENDOR_BOOTIMAGE)
+ INSTALLED_VENDOR_BOOTIMAGE_TARGET := $(PRODUCT_OUT)/vendor_boot.img
+ 
+ ifeq ($(BOARD_AVB_ENABLE),true)
++ifneq ($(filter vendor_boot,$(BOARD_AVB_PRESERVE_PREBUILT_IMAGES)),)
++$(INSTALLED_VENDOR_BOOTIMAGE_TARGET): $(INTERNAL_PREBUILT_VENDOR_BOOTIMAGE) $(AVBTOOL) $(HOST_OUT_EXECUTABLES)/verify_prebuilt_boot_image
++	cp $(INTERNAL_PREBUILT_VENDOR_BOOTIMAGE) $@
++	$(HOST_OUT_EXECUTABLES)/verify_prebuilt_boot_image \
++	    --avbtool $(AVBTOOL) --image $@ --partition vendor_boot --partition-size $(BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE)
++	cmp $(INTERNAL_PREBUILT_VENDOR_BOOTIMAGE) $@
++else
+ $(INSTALLED_VENDOR_BOOTIMAGE_TARGET): $(INTERNAL_PREBUILT_VENDOR_BOOTIMAGE) $(AVBTOOL) $(BOARD_AVB_VENDOR_BOOT_KEY_PATH)
+ 	cp $(INTERNAL_PREBUILT_VENDOR_BOOTIMAGE) $@
+ 	chmod +w $@
+@@ -1782,6 +1807,8 @@ $(INSTALLED_VENDOR_BOOTIMAGE_TARGET): $(INTERNAL_PREBUILT_VENDOR_BOOTIMAGE) $(AV
+ 	    $(call get-partition-size-argument,$(BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE)) \
+ 	    --partition_name vendor_boot $(INTERNAL_AVB_VENDOR_BOOT_SIGNING_ARGS) \
+ 	    $(BOARD_AVB_VENDOR_BOOT_ADD_HASH_FOOTER_ARGS)
++endif # preserve prebuilt AVB
++
+ else
+ $(INSTALLED_VENDOR_BOOTIMAGE_TARGET): $(INTERNAL_PREBUILT_VENDOR_BOOTIMAGE)
+ 	cp $(INTERNAL_PREBUILT_VENDOR_BOOTIMAGE) $@
+@@ -3526,6 +3553,41 @@ endif
+ endif  # PRODUCT_FSVERITY_GENERATE_METADATA
+ 
+ 
++# Checks of managed firmware must consume complete image contents, not the
++# partial source install stage. These are generated build inputs; the source
++# stage remains separate for the strict origin and metadata audit.
++POPSICLE_CHECK_VENDOR := $(TARGET_OUT_VENDOR)
++POPSICLE_CHECK_ODM := $(TARGET_OUT_ODM)
++POPSICLE_FIRMWARE_CHECK_DEPS :=
++ifdef BOARD_VENDOR_EROFS_STOCK_IMAGE
++POPSICLE_CHECK_VENDOR := $(call intermediates-dir-for,PACKAGING,managed_firmware_check_inputs)/vendor
++POPSICLE_VENDOR_CHECK_STAMP := $(POPSICLE_CHECK_VENDOR).stamp
++POPSICLE_FIRMWARE_CHECK_DEPS += $(POPSICLE_VENDOR_CHECK_STAMP)
++$(POPSICLE_VENDOR_CHECK_STAMP): PRIVATE_IMAGE := $(PRODUCT_OUT)/vendor.img
++$(POPSICLE_VENDOR_CHECK_STAMP): PRIVATE_DIR := $(POPSICLE_CHECK_VENDOR)
++$(POPSICLE_VENDOR_CHECK_STAMP): $(PRODUCT_OUT)/vendor.img $(HOST_OUT_EXECUTABLES)/fsck.erofs
++	mkdir -p $(dir $(PRIVATE_DIR))
++	rm -rf $(PRIVATE_DIR)
++	$(HOST_OUT_EXECUTABLES)/fsck.erofs --extract=$(PRIVATE_DIR) --no-preserve $(PRIVATE_IMAGE)
++	touch $@
++$(POPSICLE_CHECK_VENDOR)/etc/selinux/vendor_seapp_contexts $(POPSICLE_CHECK_VENDOR)/etc/selinux/vendor_file_contexts: $(POPSICLE_VENDOR_CHECK_STAMP)
++	test -f $@
++endif
++ifdef BOARD_ODM_EROFS_STOCK_IMAGE
++POPSICLE_CHECK_ODM := $(call intermediates-dir-for,PACKAGING,managed_firmware_check_inputs)/odm
++POPSICLE_ODM_CHECK_STAMP := $(POPSICLE_CHECK_ODM).stamp
++POPSICLE_FIRMWARE_CHECK_DEPS += $(POPSICLE_ODM_CHECK_STAMP)
++$(POPSICLE_ODM_CHECK_STAMP): PRIVATE_IMAGE := $(PRODUCT_OUT)/odm.img
++$(POPSICLE_ODM_CHECK_STAMP): PRIVATE_DIR := $(POPSICLE_CHECK_ODM)
++$(POPSICLE_ODM_CHECK_STAMP): $(PRODUCT_OUT)/odm.img $(HOST_OUT_EXECUTABLES)/fsck.erofs
++	mkdir -p $(dir $(PRIVATE_DIR))
++	rm -rf $(PRIVATE_DIR)
++	$(HOST_OUT_EXECUTABLES)/fsck.erofs --extract=$(PRIVATE_DIR) --no-preserve $(PRIVATE_IMAGE)
++	touch $@
++$(POPSICLE_CHECK_ODM)/etc/selinux/odm_seapp_contexts $(POPSICLE_CHECK_ODM)/etc/selinux/odm_file_contexts: $(POPSICLE_ODM_CHECK_STAMP)
++	test -f $@
++endif
++
+ # Treble Labeling Test
+ platform-preinstalled-apps-patterns :=
+ platform-seapp-contexts-patterns :=
+@@ -3620,6 +3682,15 @@ sepolicy-binary := $(sort $(filter \
+   $(sepolicy-binary-patterns), \
+   $(ALL_DEFAULT_INSTALLED_MODULES)))
+ 
++ifneq ($(strip $(POPSICLE_FIRMWARE_CHECK_DEPS)),)
++ifeq ($(strip $(SOONG_COMPILED_PRECOMPILED_SEPOLICY)),)
++  $(error Managed firmware checks require the actual compiled policy output)
++endif
++sepolicy-binary := $(SOONG_COMPILED_PRECOMPILED_SEPOLICY)
++vendor-seapp-contexts := $(subst $(TARGET_OUT_VENDOR)/,$(POPSICLE_CHECK_VENDOR)/,$(subst $(TARGET_OUT_ODM)/,$(POPSICLE_CHECK_ODM)/,$(vendor-seapp-contexts)))
++vendor-file-contexts := $(subst $(TARGET_OUT_VENDOR)/,$(POPSICLE_CHECK_VENDOR)/,$(subst $(TARGET_OUT_ODM)/,$(POPSICLE_CHECK_ODM)/,$(vendor-file-contexts)))
++endif
++
+ sepolicy-binary-without-vendor := $(call intermediates-dir-for,ETC,precompiled_sepolicy_without_vendor)/precompiled_sepolicy_without_vendor
+ 
+ check-selinux-treble-labeling.timestamp := $(call intermediates-dir-for,PACKAGING,check-selinux-treble-labeling)/check-selinux-treble-labeling.timestamp
+@@ -3652,6 +3723,7 @@ $(check-selinux-treble-labeling.timestamp):
+ else
+ $(check-selinux-treble-labeling.timestamp): PRIVATE_PLATFORM_APPS := $(platform-preinstalled-apps)
+ $(check-selinux-treble-labeling.timestamp): PRIVATE_VENDOR_APPS := $(vendor-preinstalled-apps)
++$(check-selinux-treble-labeling.timestamp): PRIVATE_MANAGED_APP_DIRS := $(if $(POPSICLE_VENDOR_CHECK_STAMP),$(POPSICLE_CHECK_VENDOR)) $(if $(POPSICLE_ODM_CHECK_STAMP),$(POPSICLE_CHECK_ODM))
+ $(check-selinux-treble-labeling.timestamp): PRIVATE_SEPOLICY_WITHOUT_VENDOR := $(sepolicy-binary-without-vendor)
+ $(check-selinux-treble-labeling.timestamp): PRIVATE_SEPOLICY := $(sepolicy-binary)
+ $(check-selinux-treble-labeling.timestamp): PRIVATE_PLATFORM_SEAPP_CONTEXTS := $(platform-seapp-contexts)
+@@ -3661,13 +3733,14 @@ $(check-selinux-treble-labeling.timestamp): PRIVATE_TRACKING_LIST_FILE := $(PROD
+ $(check-selinux-treble-labeling.timestamp): PRIVATE_TREAT_AS_WARNINGS := $(if $(filter true,$(PRODUCT_ENFORCE_SELINUX_TREBLE_LABELING)),,--treat_as_warnings)
+ $(check-selinux-treble-labeling.timestamp): PRIVATE_DEBUGGABLE := $(if $(filter user,$(TARGET_BUILD_VARIANT)),,--debuggable)
+ $(check-selinux-treble-labeling.timestamp): $(HOST_OUT_EXECUTABLES)/treble_labeling_tests \
+-    $(platform-preinstalled-apps) $(vendor-preinstalled-apps) \
++    $(platform-preinstalled-apps) $(vendor-preinstalled-apps) $(POPSICLE_FIRMWARE_CHECK_DEPS) \
+     $(sepolicy-binary) $(sepolicy-binary-without-vendor) \
+     $(platform-seapp-contexts) $(vendor-seapp-contexts) $(vendor-file-contexts) \
+     $(PRODUCT_SELINUX_TREBLE_LABELING_TRACKING_LIST_FILE) $(AAPT2)
+ 	@rm -rf $@
+ 	@echo $(PRIVATE_PLATFORM_APPS) > $@.platform_apps.txt
+ 	@echo $(PRIVATE_VENDOR_APPS) > $@.vendor_apps.txt
++	$(if $(PRIVATE_MANAGED_APP_DIRS),find $(PRIVATE_MANAGED_APP_DIRS) -type f -name '*.apk' >> $@.vendor_apps.txt)
+ 	$(hide) $< --platform_apks $@.platform_apps.txt --vendor_apks $@.vendor_apps.txt \
+     --precompiled_sepolicy_without_vendor $(PRIVATE_SEPOLICY_WITHOUT_VENDOR) \
+     --precompiled_sepolicy $(PRIVATE_SEPOLICY) \
+@@ -4159,6 +4232,11 @@ endif # BUILDING_SYSTEM_OTHER_IMAGE
+ # -----------------------------------------------------------------
+ # vendor partition image
+ INSTALLED_FILES_OUTSIDE_IMAGES := $(filter-out $(TARGET_OUT_VENDOR)/%, $(INSTALLED_FILES_OUTSIDE_IMAGES))
++ifdef BOARD_VENDOR_EROFS_STOCK_IMAGE
++ifneq ($(BUILDING_VENDOR_IMAGE),true)
++  $(error Managed OEM vendor derivation requires BUILDING_VENDOR_IMAGE=true)
++endif
++endif
+ ifdef BUILDING_VENDOR_IMAGE
+ INTERNAL_VENDORIMAGE_FILES := \
+     $(filter $(TARGET_OUT_VENDOR)/%,\
+@@ -4224,6 +4302,12 @@ $(call declare-0p-target,$(INSTALLED_FILES_JSON_VENDOR))
+ vendorimage_intermediates := \
+     $(call intermediates-dir-for,PACKAGING,vendor)
+ BUILT_VENDORIMAGE_TARGET := $(PRODUCT_OUT)/vendor.img
++ifdef BOARD_VENDOR_EROFS_STOCK_IMAGE
++include $(BUILD_SYSTEM)/popsicle_firmware_filesystems.mk
++define build-vendorimage-target
++  $(build-managed-vendorimage-target)
++endef
++else
+ define build-vendorimage-target
+   $(call pretty,"Target vendor fs image: $(INSTALLED_VENDORIMAGE_TARGET)")
+   @mkdir -p $(TARGET_OUT_VENDOR)
+@@ -4236,6 +4320,7 @@ define build-vendorimage-target
+           $(INSTALLED_VENDORIMAGE_TARGET) $(TARGET_OUT)
+   $(call assert-max-image-size,$(INSTALLED_VENDORIMAGE_TARGET) $(RECOVERY_FROM_BOOT_PATCH),$(BOARD_VENDORIMAGE_PARTITION_SIZE))
+ endef
++endif # BOARD_VENDOR_EROFS_STOCK_IMAGE
+ 
+ $(eval $(call write-partition-file-list,$(vendorimage_intermediates)/file_list.txt,$(TARGET_OUT_VENDOR),$(INTERNAL_VENDORIMAGE_FILES)))
+ # Used by soong sandwich to request the staging dir be built
+@@ -4244,6 +4329,7 @@ $(vendorimage_intermediates)/staging_dir.stamp: $(filter $(TARGET_OUT_VENDOR)/%,
+ 
+ # We just build this directly to the install location.
+ INSTALLED_VENDORIMAGE_TARGET := $(BUILT_VENDORIMAGE_TARGET)
++$(INSTALLED_VENDORIMAGE_TARGET): $(POPSICLE_VENDOR_RAW) $(POPSICLE_VENDOR_HOST_DEPS) $(POPSICLE_VENDOR_INPUTS)
+ $(INSTALLED_VENDORIMAGE_TARGET): \
+     $(INTERNAL_USERIMAGES_DEPS) \
+     $(INTERNAL_VENDORIMAGE_FILES) \
+@@ -4253,10 +4339,10 @@ $(INSTALLED_VENDORIMAGE_TARGET): \
+ 	$(build-vendorimage-target)
+ 
+ $(call declare-container-license-metadata,$(INSTALLED_VENDORIMAGE_TARGET),legacy_proprietary,proprietary,,"Vendor Image",vendor)
+-$(call declare-container-license-deps,$(INSTALLED_VENDORIMAGE_TARGET),$(INTERNAL_USERIMAGES_DEPS) $(INTERNAL_VENDORIMAGE_FILES) $(RECOVERY_FROM_BOOT_PATH),$(PRODUCT_OUT)/:/)
++$(call declare-container-license-deps,$(INSTALLED_VENDORIMAGE_TARGET),$(INTERNAL_USERIMAGES_DEPS) $(INTERNAL_VENDORIMAGE_FILES) $(RECOVERY_FROM_BOOT_PATH) $(POPSICLE_VENDOR_RAW) $(POPSICLE_VENDOR_INPUTS) $(POPSICLE_VENDOR_HOST_DEPS),$(PRODUCT_OUT)/:/)
+ 
+ .PHONY: vendorimage-nodeps vnod
+-vendorimage-nodeps vnod: | $(INTERNAL_USERIMAGES_DEPS) $(vendorimage_intermediates)/file_list.txt
++vendorimage-nodeps vnod: $(POPSICLE_VENDOR_RAW) $(POPSICLE_VENDOR_HOST_DEPS) $(POPSICLE_VENDOR_INPUTS) | $(INTERNAL_USERIMAGES_DEPS) $(vendorimage_intermediates)/file_list.txt
+ 	$(build-vendorimage-target)
+ 
+ .PHONY: sync_vendor
+@@ -4464,6 +4550,12 @@ $(call declare-0p-target,$(INSTALLED_FILES_JSON_ODM))
+ odmimage_intermediates := \
+     $(call intermediates-dir-for,PACKAGING,odm)
+ BUILT_ODMIMAGE_TARGET := $(PRODUCT_OUT)/odm.img
++ifdef BOARD_ODM_EROFS_STOCK_IMAGE
++include $(BUILD_SYSTEM)/popsicle_odm_filesystems.mk
++define build-odmimage-target
++  $(build-managed-odmimage-target)
++endef
++else
+ define build-odmimage-target
+   $(call pretty,"Target odm fs image: $(INSTALLED_ODMIMAGE_TARGET)")
+   @mkdir -p $(TARGET_OUT_ODM)
+@@ -4477,6 +4569,7 @@ define build-odmimage-target
+           $(INSTALLED_ODMIMAGE_TARGET) $(TARGET_OUT)
+   $(call assert-max-image-size,$(INSTALLED_ODMIMAGE_TARGET),$(BOARD_ODMIMAGE_PARTITION_SIZE))
+ endef
++endif # BOARD_ODM_EROFS_STOCK_IMAGE
+ 
+ $(eval $(call write-partition-file-list,$(odmimage_intermediates)/file_list.txt,$(TARGET_OUT_ODM),$(INTERNAL_ODMIMAGE_FILES)))
+ # Used by soong sandwich to request the staging dir be built
+@@ -4485,6 +4578,7 @@ $(odmimage_intermediates)/staging_dir.stamp: $(filter $(TARGET_OUT_ODM)/%,$(INTE
+ 
+ # We just build this directly to the install location.
+ INSTALLED_ODMIMAGE_TARGET := $(BUILT_ODMIMAGE_TARGET)
++$(INSTALLED_ODMIMAGE_TARGET): $(POPSICLE_ODM_RAW) $(POPSICLE_ODM_HOST_DEPS) $(POPSICLE_ODM_INPUTS)
+ $(INSTALLED_ODMIMAGE_TARGET): \
+     $(INTERNAL_USERIMAGES_DEPS) \
+     $(INTERNAL_ODMIMAGE_FILES) \
+@@ -4493,10 +4587,10 @@ $(INSTALLED_ODMIMAGE_TARGET): \
+ 	$(build-odmimage-target)
+ 
+ $(call declare-1p-container,$(INSTALLED_ODMIMAGE_TARGET),)
+-$(call declare-container-license-deps,$(INSTALLED_ODMIMAGE_TARGET),$(INTERNAL_USERIMAGES_DEPS) $(INTERNAL_ODMIMAGE_FILES) $(INSTALLED_FILES_FILE_ODM),$(PRODUCT_OUT)/:/)
++$(call declare-container-license-deps,$(INSTALLED_ODMIMAGE_TARGET),$(INTERNAL_USERIMAGES_DEPS) $(INTERNAL_ODMIMAGE_FILES) $(INSTALLED_FILES_FILE_ODM) $(POPSICLE_ODM_RAW) $(POPSICLE_ODM_HOST_DEPS) $(POPSICLE_ODM_INPUTS),$(PRODUCT_OUT)/:/)
+ 
+ .PHONY: odmimage-nodeps onod
+-odmimage-nodeps onod: | $(INTERNAL_USERIMAGES_DEPS) $(odmimage_intermediates)/file_list.txt
++odmimage-nodeps onod: $(POPSICLE_ODM_RAW) $(POPSICLE_ODM_HOST_DEPS) $(POPSICLE_ODM_INPUTS) | $(INTERNAL_USERIMAGES_DEPS) $(odmimage_intermediates)/file_list.txt
+ 	$(build-odmimage-target)
+ 
+ .PHONY: sync_odm
+@@ -5345,6 +5439,27 @@ $(foreach partition,\
+           $(eval $(call declare-custom-vbmeta-target,$(partition))))
+ endif
+ 
++ifdef BOARD_PREBUILT_VBMETAIMAGE
++# Product discovery reads BoardConfig before lunch selects the build variant.
++# Enforce the variant here, where actual image build rules are evaluated.
++ifeq ($(filter user userdebug,$(TARGET_BUILD_VARIANT)),)
++$(error Pinned top-level vbmeta requires the unlocked user or userdebug product)
++endif
++VERIFY_PREBUILT_VBMETA := $(HOST_OUT_EXECUTABLES)/verify_prebuilt_vbmeta
++PREBUILT_VBMETA_VERIFY_ARGS := --reference $(BOARD_PREBUILT_VBMETAIMAGE) \
++    --witness $(BOARD_PREBUILT_VBMETA_WITNESS) \
++    --algorithm $(BOARD_PREBUILT_VBMETA_ALGORITHM) \
++    --partition-size $(BOARD_VBMETAIMAGE_PARTITION_SIZE)
++# This unlocked product path preserves the OEM top-level signature. It does
++# not assert that OEM descriptors authenticate modified subordinate images.
++define build-vbmetaimage-target
++  $(call pretty,"Target pinned vbmeta image: $(1)")
++  $(hide) $(VERIFY_PREBUILT_VBMETA) $(PREBUILT_VBMETA_VERIFY_ARGS)
++  $(hide) mkdir -p $(dir $(1))
++  $(hide) cp $(BOARD_PREBUILT_VBMETAIMAGE) $(1)
++  $(hide) $(VERIFY_PREBUILT_VBMETA) $(PREBUILT_VBMETA_VERIFY_ARGS) --image $(1)
++endef
++else
+ # $(1): output file
+ define build-vbmetaimage-target
+   $(call pretty,"Target vbmeta image: $(INSTALLED_VBMETAIMAGE_TARGET)")
+@@ -5361,9 +5476,11 @@ define build-vbmetaimage-target
+     truncate -s 65536 $@
+   $(hide) rm -rf $(AVB_CHAIN_KEY_DIR)
+ endef
++endif # BOARD_PREBUILT_VBMETAIMAGE
+ 
+ ifdef BUILDING_VBMETA_IMAGE
+ INSTALLED_VBMETAIMAGE_TARGET := $(BUILT_VBMETAIMAGE_TARGET)
++$(INSTALLED_VBMETAIMAGE_TARGET): $(BOARD_PREBUILT_VBMETAIMAGE) $(BOARD_PREBUILT_VBMETA_WITNESS) $(VERIFY_PREBUILT_VBMETA)
+ $(INSTALLED_VBMETAIMAGE_TARGET): PRIVATE_AVB_VBMETA_SIGNING_ARGS := \
+     --algorithm $(BOARD_AVB_ALGORITHM) --key $(BOARD_AVB_KEY_PATH)
+ 
+@@ -5402,7 +5519,7 @@ UNMOUNTED_NOTICE_DEPS += $(INSTALLED_VBMETAIMAGE_TARGET)
+ .PHONY: vbmetaimage-nodeps vbmetanod
+ vbmetaimage-nodeps vbmetanod: PRIVATE_AVB_VBMETA_SIGNING_ARGS := \
+     --algorithm $(BOARD_AVB_ALGORITHM) --key $(BOARD_AVB_KEY_PATH)
+-vbmetaimage-nodeps vbmetanod:
++vbmetaimage-nodeps vbmetanod: $(BOARD_PREBUILT_VBMETAIMAGE) $(BOARD_PREBUILT_VBMETA_WITNESS) $(VERIFY_PREBUILT_VBMETA)
+ 	$(call build-vbmetaimage-target,$(INSTALLED_VBMETAIMAGE_TARGET))
+ endif # BUILDING_VBMETA_IMAGE
+ 
+@@ -5471,6 +5588,27 @@ endif # TARGET_BUILD_UNBUNDLED
+ # -----------------------------------------------------------------
+ # Check VINTF of build
+ 
++# Source SKU lists also trigger manifest assembly in android-info.mk. Managed
++# firmware supplies complete manifests from its images instead; keep the source
++# producer contract untouched and resolve the check/TF selectors separately.
++CHECK_VINTF_VENDOR_MANIFEST_SKUS := $(DEVICE_MANIFEST_SKUS)
++CHECK_VINTF_ODM_MANIFEST_SKUS := $(ODM_MANIFEST_SKUS)
++ifdef BOARD_VENDOR_EROFS_STOCK_IMAGE
++ifneq ($(strip $(DEVICE_MANIFEST_SKUS)$(DEVICE_MANIFEST_FILE)),)
++  $(error Managed vendor image conflicts with source manifest producers)
++endif
++ifeq ($(strip $(BOARD_VENDOR_EROFS_MANIFEST_SKUS)),)
++  $(error Managed vendor image requires explicit actual boot SKU selectors)
++endif
++CHECK_VINTF_VENDOR_MANIFEST_SKUS := $(BOARD_VENDOR_EROFS_MANIFEST_SKUS)
++endif
++ifdef BOARD_ODM_EROFS_STOCK_IMAGE
++ifneq ($(strip $(ODM_MANIFEST_SKUS)$(ODM_MANIFEST_FILES)),)
++  $(error Managed ODM image conflicts with source manifest producers)
++endif
++CHECK_VINTF_ODM_MANIFEST_SKUS := $(BOARD_ODM_EROFS_MANIFEST_SKUS)
++endif
++
+ # Note: vendor_dlkm, odm_dlkm, and system_dlkm does not have VINTF files.
+ ifeq (,$(TARGET_BUILD_UNBUNDLED))
+ 
+@@ -5497,7 +5635,7 @@ APEX_INFO_FILE := $(APEX_OUT)/apex-info-list.xml
+ $(APEX_INFO_FILE): PRIVATE_APEX_FILES := $(apex_files)
+ $(APEX_INFO_FILE): $(HOST_OUT_EXECUTABLES)/apexd_host \
+     $(HOST_OUT_EXECUTABLES)/deapexer $(HOST_OUT_EXECUTABLES)/debugfs $(HOST_OUT_EXECUTABLES)/fsck.erofs \
+-    $(apex_files)
++    $(apex_files) $(POPSICLE_FIRMWARE_CHECK_DEPS)
+ 	@echo "Extracting apexes..."
+ 	@echo $(PRIVATE_APEX_FILES) > /dev/null
+ 	@rm -rf $(APEX_OUT)
+@@ -5505,8 +5643,8 @@ $(APEX_INFO_FILE): $(HOST_OUT_EXECUTABLES)/apexd_host \
+ 	$< --system_path $(TARGET_OUT) \
+ 	   --system_ext_path $(TARGET_OUT_SYSTEM_EXT) \
+ 	   --product_path $(TARGET_OUT_PRODUCT) \
+-	   --vendor_path $(TARGET_OUT_VENDOR) \
+-	   --odm_path $(TARGET_OUT_ODM) \
++	   --vendor_path $(POPSICLE_CHECK_VENDOR) \
++	   --odm_path $(POPSICLE_CHECK_ODM) \
+ 	   --apex_path $(APEX_OUT)
+ 
+ apex_files :=
+@@ -5525,14 +5663,15 @@ check_vintf_common_srcs_patterns := \
+ 
+ check_vintf_common_srcs := $(sort $(filter $(check_vintf_common_srcs_patterns),$(INTERNAL_ALLIMAGES_FILES)))
+ check_vintf_common_srcs_patterns :=
++check_vintf_common_srcs += $(POPSICLE_FIRMWARE_CHECK_DEPS)
+ 
+ check_vintf_has_system :=
+ check_vintf_has_vendor :=
+ 
+-ifneq (,$(filter EMPTY_ODM_SKU_PLACEHOLDER,$(ODM_MANIFEST_SKUS)))
+-$(error EMPTY_ODM_SKU_PLACEHOLDER is an internal variable and cannot be used for ODM_MANIFEST_SKUS)
++ifneq (,$(filter EMPTY_ODM_SKU_PLACEHOLDER,$(CHECK_VINTF_ODM_MANIFEST_SKUS)))
++$(error EMPTY_ODM_SKU_PLACEHOLDER is an internal variable and cannot be used for CHECK_VINTF_ODM_MANIFEST_SKUS)
+ endif
+-ifneq (,$(filter EMPTY_VENDOR_SKU_PLACEHOLDER,$(DEVICE_MANIFEST_SKUS)))
++ifneq (,$(filter EMPTY_VENDOR_SKU_PLACEHOLDER,$(CHECK_VINTF_VENDOR_MANIFEST_SKUS)))
+ $(error EMPTY_VENDOR_SKU_PLACEHOLDER is an internal variable and cannot be used for DEIVCE_MANIFEST_SKUS)
+ endif
+ 
+@@ -5576,20 +5715,21 @@ endif # BUILDING_SYSTEM_IMAGE
+ check_vintf_vendor_deps := $(filter $(TARGET_OUT_VENDOR)/etc/vintf/% \
+                                     $(TARGET_OUT_VENDOR)/apex/%, \
+                                     $(check_vintf_common_srcs))
++check_vintf_vendor_deps += $(POPSICLE_VENDOR_CHECK_STAMP)
+ ifneq ($(strip $(check_vintf_vendor_deps)),)
+ check_vintf_has_vendor := true
+ check_vintf_vendor_log := $(intermediates)/check_vintf_vendor.log
+ check_vintf_all_deps += $(check_vintf_vendor_log)
+ # Check vendor SKU=(empty) case when:
+ # - DEVICE_MANIFEST_FILE is not empty; OR
+-# - DEVICE_MANIFEST_FILE is empty AND DEVICE_MANIFEST_SKUS is empty (only vendor manifest fragments are used)
++# - DEVICE_MANIFEST_FILE is empty AND CHECK_VINTF_VENDOR_MANIFEST_SKUS is empty (only vendor manifest fragments are used)
+ $(check_vintf_vendor_log): PRIVATE_VENDOR_SKUS := \
+   $(if $(DEVICE_MANIFEST_FILE),EMPTY_VENDOR_SKU_PLACEHOLDER,\
+-    $(if $(DEVICE_MANIFEST_SKUS),,EMPTY_VENDOR_SKU_PLACEHOLDER)) \
+-  $(DEVICE_MANIFEST_SKUS)
++    $(if $(CHECK_VINTF_VENDOR_MANIFEST_SKUS),,EMPTY_VENDOR_SKU_PLACEHOLDER)) \
++  $(CHECK_VINTF_VENDOR_MANIFEST_SKUS)
+ $(check_vintf_vendor_log): $(HOST_OUT_EXECUTABLES)/checkvintf $(check_vintf_vendor_deps) $(APEX_INFO_FILE)
+ 	$(foreach vendor_sku,$(PRIVATE_VENDOR_SKUS), \
+-	  ( $< --check-one --dirmap /vendor:$(TARGET_OUT_VENDOR) --dirmap /apex:$(APEX_OUT) \
++	  ( $< --check-one --dirmap /vendor:$(POPSICLE_CHECK_VENDOR) --dirmap /apex:$(APEX_OUT) \
+ 	       --property ro.boot.product.vendor.sku=$(filter-out EMPTY_VENDOR_SKU_PLACEHOLDER,$(vendor_sku)) \
+ 	       > $@ 2>&1 ) || ( cat $@ && exit 1 ); )
+ $(call declare-1p-target,$(check_vintf_vendor_log))
+@@ -5744,8 +5884,8 @@ endif # PRODUCT_OTA_ENFORCE_VINTF_KERNEL_REQUIREMENTS
+ 
+ check_vintf_compatible_args += \
+   --dirmap /system:$(TARGET_OUT) \
+-  --dirmap /vendor:$(TARGET_OUT_VENDOR) \
+-  --dirmap /odm:$(TARGET_OUT_ODM) \
++  --dirmap /vendor:$(POPSICLE_CHECK_VENDOR) \
++  --dirmap /odm:$(POPSICLE_CHECK_ODM) \
+   --dirmap /product:$(TARGET_OUT_PRODUCT) \
+   --dirmap /system_ext:$(TARGET_OUT_SYSTEM_EXT) \
+   --dirmap /apex:$(APEX_OUT) \
+@@ -5758,18 +5898,18 @@ $(check_vintf_compatible_log): PRIVATE_CHECK_VINTF_ARGS := $(check_vintf_compati
+ $(check_vintf_compatible_log): PRIVATE_CHECK_VINTF_DEPS := $(check_vintf_compatible_deps)
+ # Check ODM SKU=(empty) case when:
+ # - ODM_MANIFEST_FILES is not empty; OR
+-# - ODM_MANIFEST_FILES is empty AND ODM_MANIFEST_SKUS is empty (only ODM manifest fragments are used)
++# - ODM_MANIFEST_FILES is empty AND CHECK_VINTF_ODM_MANIFEST_SKUS is empty (only ODM manifest fragments are used)
+ $(check_vintf_compatible_log): PRIVATE_ODM_SKUS := \
+   $(if $(ODM_MANIFEST_FILES),EMPTY_ODM_SKU_PLACEHOLDER,\
+-    $(if $(ODM_MANIFEST_SKUS),,EMPTY_ODM_SKU_PLACEHOLDER)) \
+-  $(ODM_MANIFEST_SKUS)
++    $(if $(CHECK_VINTF_ODM_MANIFEST_SKUS),,EMPTY_ODM_SKU_PLACEHOLDER)) \
++  $(CHECK_VINTF_ODM_MANIFEST_SKUS)
+ # Check vendor SKU=(empty) case when:
+ # - DEVICE_MANIFEST_FILE is not empty; OR
+-# - DEVICE_MANIFEST_FILE is empty AND DEVICE_MANIFEST_SKUS is empty (only vendor manifest fragments are used)
++# - DEVICE_MANIFEST_FILE is empty AND CHECK_VINTF_VENDOR_MANIFEST_SKUS is empty (only vendor manifest fragments are used)
+ $(check_vintf_compatible_log): PRIVATE_VENDOR_SKUS := \
+   $(if $(DEVICE_MANIFEST_FILE),EMPTY_VENDOR_SKU_PLACEHOLDER,\
+-    $(if $(DEVICE_MANIFEST_SKUS),,EMPTY_VENDOR_SKU_PLACEHOLDER)) \
+-  $(DEVICE_MANIFEST_SKUS)
++    $(if $(CHECK_VINTF_VENDOR_MANIFEST_SKUS),,EMPTY_VENDOR_SKU_PLACEHOLDER)) \
++  $(CHECK_VINTF_VENDOR_MANIFEST_SKUS)
+ $(check_vintf_compatible_log): $(HOST_OUT_EXECUTABLES)/checkvintf $(check_vintf_compatible_deps)
+ 	@echo "PRODUCT_OTA_ENFORCE_VINTF_KERNEL_REQUIREMENTS=$(PRODUCT_OTA_ENFORCE_VINTF_KERNEL_REQUIREMENTS)" > $@
+ 	@echo -n -e 'Deps: \n  ' >> $@
+@@ -6202,9 +6342,14 @@ ifeq ($(BUILDING_VBMETA_IMAGE),true)
+ 	$(hide) echo "avb_building_vbmeta_image=true" >> $@
+ endif # BUILDING_VBMETA_IMAGE
+ 	$(hide) echo "avb_enable=true" >> $@
++ifdef BOARD_PREBUILT_VBMETAIMAGE
++	$(hide) echo "avb_prebuilt_vbmeta=true" >> $@
++	$(hide) echo "avb_vbmeta_algorithm=$(BOARD_PREBUILT_VBMETA_ALGORITHM)" >> $@
++else
+ 	$(hide) echo "avb_vbmeta_key_path=$(BOARD_AVB_KEY_PATH)" >> $@
+ 	$(hide) echo "avb_vbmeta_algorithm=$(BOARD_AVB_ALGORITHM)" >> $@
+ 	$(hide) echo "avb_vbmeta_args=$(BOARD_AVB_MAKE_VBMETA_IMAGE_ARGS)" >> $@
++endif # BOARD_PREBUILT_VBMETAIMAGE
+ 	$(hide) echo "avb_boot_add_hash_footer_args=$(BOARD_AVB_BOOT_ADD_HASH_FOOTER_ARGS)" >> $@
+ ifdef BOARD_AVB_BOOT_KEY_PATH
+ 	$(hide) echo "avb_boot_key_path=$(BOARD_AVB_BOOT_KEY_PATH)" >> $@
+@@ -6313,14 +6458,14 @@ endif # BOARD_USES_PVMFWIMAGE
+ 	$(call dump-dynamic-partitions-info,$@)
+ 	@# VINTF checks
+ 	$(hide) echo "vintf_enforce=true" >> $@
+-ifdef ODM_MANIFEST_SKUS
+-	$(hide) echo "vintf_odm_manifest_skus=$(ODM_MANIFEST_SKUS)" >> $@
++ifdef CHECK_VINTF_ODM_MANIFEST_SKUS
++	$(hide) echo "vintf_odm_manifest_skus=$(CHECK_VINTF_ODM_MANIFEST_SKUS)" >> $@
+ endif
+ ifdef ODM_MANIFEST_FILES
+ 	$(hide) echo "vintf_include_empty_odm_sku=true" >> $@
+ endif
+-ifdef DEVICE_MANIFEST_SKUS
+-	$(hide) echo "vintf_vendor_manifest_skus=$(DEVICE_MANIFEST_SKUS)" >> $@
++ifdef CHECK_VINTF_VENDOR_MANIFEST_SKUS
++	$(hide) echo "vintf_vendor_manifest_skus=$(CHECK_VINTF_VENDOR_MANIFEST_SKUS)" >> $@
+ endif
+ ifdef DEVICE_MANIFEST_FILE
+ 	$(hide) echo "vintf_include_empty_vendor_sku=true" >> $@
+@@ -6370,6 +6515,9 @@ BUILT_TARGET_FILES_PACKAGE := $(intermediates)/$(name).zip
+ $(BUILT_TARGET_FILES_PACKAGE): zip_root := $(intermediates)/$(name)
+ $(BUILT_TARGET_FILES_DIR): zip_root := $(intermediates)/$(name)
+ $(BUILT_TARGET_FILES_DIR): intermediates := $(intermediates)
++ifdef BOARD_PREBUILT_VBMETAIMAGE
++$(BUILT_TARGET_FILES_DIR): $(INSTALLED_VBMETAIMAGE_TARGET) $(VERIFY_PREBUILT_VBMETA) $(BOARD_PREBUILT_VBMETAIMAGE) $(BOARD_PREBUILT_VBMETA_WITNESS)
++endif
+ 
+ ifneq ($(SOONG_DEFINED_SYSTEM_IMAGE_PATH),)
+   $(BUILT_TARGET_FILES_DIR): $(SOONG_DEFINED_SYSTEM_IMAGE_PATH)
+@@ -6625,6 +6773,9 @@ endif
+ 
+ ifdef BUILDING_VENDOR_IMAGE
+   $(BUILT_TARGET_FILES_DIR): $(INTERNAL_VENDORIMAGE_FILES)
++  ifdef BOARD_VENDOR_EROFS_STOCK_IMAGE
++    $(BUILT_TARGET_FILES_DIR): $(INSTALLED_VENDORIMAGE_TARGET) $(POPSICLE_VENDOR_RAW) $(POPSICLE_VENDOR_HOST_DEPS) $(POPSICLE_VENDOR_INPUTS) $(POPSICLE_PREBUILT_INPUTS)
++  endif
+   ifdef COPY_IMAGES_FOR_TARGET_FILES_ZIP
+     $(BUILT_TARGET_FILES_DIR): $(BUILT_VENDORIMAGE_TARGET)
+   endif
+@@ -6660,6 +6811,9 @@ endif
+ 
+ ifdef BUILDING_ODM_IMAGE
+   $(BUILT_TARGET_FILES_DIR): $(INTERNAL_ODMIMAGE_FILES)
++  ifdef BOARD_ODM_EROFS_STOCK_IMAGE
++    $(BUILT_TARGET_FILES_DIR): $(INSTALLED_ODMIMAGE_TARGET) $(POPSICLE_ODM_RAW) $(POPSICLE_ODM_HOST_DEPS) $(POPSICLE_ODM_INPUTS)
++  endif
+   ifdef COPY_IMAGES_FOR_TARGET_FILES_ZIP
+     $(BUILT_TARGET_FILES_DIR): $(BUILT_ODMIMAGE_TARGET)
+   endif
+@@ -6920,10 +7074,17 @@ ifdef BUILDING_USERDATA_IMAGE
+ 	    $(TARGET_OUT_DATA),$(zip_root)/DATA)
+ endif
+ ifdef BUILDING_VENDOR_IMAGE
++ifdef BOARD_VENDOR_EROFS_STOCK_IMAGE
++	@# Use the final image, including its OEM owners/xattrs and managed repairs.
++	$(hide) mkdir -p $(zip_root)/META
++	$(hide) $(POPSICLE_VENDOR_TOOL) export --reader $(POPSICLE_VENDOR_READER) \
++	    --image $(INSTALLED_VENDORIMAGE_TARGET) --target-files $(zip_root)
++else
+ 	@# Contents of the vendor image
+ 	$(hide) $(call package_files-copy-root, \
+ 	    $(TARGET_OUT_VENDOR),$(zip_root)/VENDOR)
+ endif
++endif
+ ifdef BUILDING_PRODUCT_IMAGE
+ 	@# Contents of the product image
+ 	$(hide) $(call package_files-copy-root, \
+@@ -6935,14 +7096,22 @@ ifdef BUILDING_SYSTEM_EXT_IMAGE
+ 	    $(TARGET_OUT_SYSTEM_EXT),$(zip_root)/SYSTEM_EXT)
+ endif
+ ifdef BUILDING_ODM_IMAGE
++ifdef BOARD_ODM_EROFS_STOCK_IMAGE
++	$(hide) $(call export-managed-odm-target-files,$(zip_root))
++else
+ 	@# Contents of the odm image
+ 	$(hide) $(call package_files-copy-root, \
+ 	    $(TARGET_OUT_ODM),$(zip_root)/ODM)
+ endif
++else ifneq ($(filter ODM,$(POPSICLE_PREBUILT_PARTITIONS)),)
++	$(hide) $(call export-prebuilt-target-files,ODM,$(zip_root))
++endif
+ ifdef BUILDING_VENDOR_DLKM_IMAGE
+ 	@# Contents of the vendor_dlkm image
+ 	$(hide) $(call package_files-copy-root, \
+ 	    $(TARGET_OUT_VENDOR_DLKM),$(zip_root)/VENDOR_DLKM)
++else ifneq ($(filter VENDOR_DLKM,$(POPSICLE_PREBUILT_PARTITIONS)),)
++	$(hide) $(call export-prebuilt-target-files,VENDOR_DLKM,$(zip_root))
+ endif
+ ifdef BUILDING_ODM_DLKM_IMAGE
+ 	@# Contents of the odm_dlkm image
+@@ -6953,6 +7122,8 @@ ifdef BUILDING_SYSTEM_DLKM_IMAGE
+ 	@# Contents of the system_dlkm image
+ 	$(hide) $(call package_files-copy-root, \
+ 	    $(TARGET_OUT_SYSTEM_DLKM),$(zip_root)/SYSTEM_DLKM)
++else ifneq ($(filter SYSTEM_DLKM,$(POPSICLE_PREBUILT_PARTITIONS)),)
++	$(hide) $(call export-prebuilt-target-files,SYSTEM_DLKM,$(zip_root))
+ endif
+ ifdef BUILDING_SYSTEM_OTHER_IMAGE
+ 	@# Contents of the system_other image
+@@ -6987,6 +7158,15 @@ endif
+ 	$(hide) echo "$(PRODUCT_OTA_PUBLIC_KEYS)" > $(zip_root)/META/otakeys.txt
+ 	$(hide) cp $(SELINUX_FC) $(zip_root)/META/file_contexts.bin
+ 	$(hide) cp $(INSTALLED_MISC_INFO_TARGET) $(zip_root)/META/misc_info.txt
++ifdef BOARD_VENDOR_EROFS_STOCK_IMAGE
++	$(hide) $(POPSICLE_VENDOR_TOOL) sync-avb-info --image $(INSTALLED_VENDORIMAGE_TARGET) \
++	    --reader $(POPSICLE_VENDOR_READER) --image-info $(zip_root)/META/misc_info.txt \
++	    --key $(BOARD_VENDOR_EROFS_AVB_KEY_PATH) --public-key $(BOARD_VENDOR_EROFS_AVB_PUBLIC_KEY) \
++	    --fec $(HOST_OUT_EXECUTABLES)/fec
++endif
++ifdef BOARD_ODM_EROFS_STOCK_IMAGE
++	$(hide) $(call sync-managed-odm-avb-info,$(zip_root))
++endif
+ ifneq ($(INSTALLED_FASTBOOT_INFO_TARGET),)
+ 	$(hide) cp $(INSTALLED_FASTBOOT_INFO_TARGET) $(zip_root)/META/fastboot-info.txt
+ endif
+@@ -7078,8 +7258,13 @@ ifdef INSTALLED_BOOTIMAGE_TARGET
+ endif # INSTALLED_BOOTIMAGE_TARGET
+ endif # INTERNAL_PREBUILT_BOOTIMAGE != "" || BOARD_COPY_BOOT_IMAGE_TO_TARGET_FILES == true
+ else # BOARD_PREBUILT_BOOTIMAGE is defined
++ifneq ($(filter boot,$(BOARD_AVB_PRESERVE_PREBUILT_IMAGES)),)
++	$(hide) mkdir -p $(zip_root)/IMAGES
++	$(hide) cp $(INSTALLED_BOOTIMAGE_TARGET) $(zip_root)/IMAGES/
++else
+ 	$(hide) mkdir -p $(zip_root)/PREBUILT_IMAGES
+ 	$(hide) cp $(INSTALLED_BOOTIMAGE_TARGET) $(zip_root)/PREBUILT_IMAGES/
++endif # preserve prebuilt AVB
+ endif # BOARD_PREBUILT_BOOTIMAGE
+ ifdef BOARD_PREBUILT_ODMIMAGE
+ 	$(hide) mkdir -p $(zip_root)/IMAGES
+@@ -7098,8 +7283,13 @@ ifdef BOARD_PREBUILT_SYSTEM_DLKMIMAGE
+ 	$(hide) cp $(INSTALLED_SYSTEM_DLKMIMAGE_TARGET) $(zip_root)/IMAGES/
+ endif
+ ifdef BOARD_PREBUILT_DTBOIMAGE
++ifneq ($(filter dtbo,$(BOARD_AVB_PRESERVE_PREBUILT_IMAGES)),)
++	$(hide) mkdir -p $(zip_root)/IMAGES
++	$(hide) cp $(INSTALLED_DTBOIMAGE_TARGET) $(zip_root)/IMAGES/
++else
+ 	$(hide) mkdir -p $(zip_root)/PREBUILT_IMAGES
+ 	$(hide) cp $(INSTALLED_DTBOIMAGE_TARGET) $(zip_root)/PREBUILT_IMAGES/
++endif # preserve prebuilt AVB
+ endif # BOARD_PREBUILT_DTBOIMAGE
+ ifdef BOARD_KERNEL_PATH_16K
+ 	$(hide) mkdir -p $(zip_root)/PREBUILT_IMAGES
+@@ -7151,9 +7341,15 @@ ifdef BUILDING_SYSTEM_IMAGE
+ 	$(hide) $(call fs_config,$(zip_root)/ROOT,) > $(zip_root)/META/root_filesystem_config.txt
+ endif
+ ifdef BUILDING_VENDOR_IMAGE
++ifdef BOARD_VENDOR_EROFS_STOCK_IMAGE
++	@# Prepopulate before add_img_to_target_files; fs_config was exported from this image.
++	$(hide) mkdir -p $(zip_root)/IMAGES
++	$(hide) cp $(INSTALLED_VENDORIMAGE_TARGET) $(zip_root)/IMAGES/vendor.img
++else
+ 	$(hide) $(call copy-image-and-generate-map,$(BUILT_VENDORIMAGE_TARGET),$(zip_root)/IMAGES,vendor)
+ 	$(hide) $(call fs_config,$(zip_root)/VENDOR,vendor/) > $(zip_root)/META/vendor_filesystem_config.txt
+ endif
++endif
+ ifdef BUILDING_PRODUCT_IMAGE
+ 	$(hide) $(call copy-image-and-generate-map,$(BUILT_PRODUCTIMAGE_TARGET),$(zip_root)/IMAGES,product)
+ 	$(hide) $(call fs_config,$(zip_root)/PRODUCT,product/) > $(zip_root)/META/product_filesystem_config.txt
+@@ -7163,9 +7359,14 @@ ifdef BUILDING_SYSTEM_EXT_IMAGE
+ 	$(hide) $(call fs_config,$(zip_root)/SYSTEM_EXT,system_ext/) > $(zip_root)/META/system_ext_filesystem_config.txt
+ endif
+ ifdef BUILDING_ODM_IMAGE
++ifdef BOARD_ODM_EROFS_STOCK_IMAGE
++	$(hide) mkdir -p $(zip_root)/IMAGES
++	$(hide) cp $(INSTALLED_ODMIMAGE_TARGET) $(zip_root)/IMAGES/odm.img
++else
+ 	$(hide) $(call copy-image-and-generate-map,$(BUILT_ODMIMAGE_TARGET),$(zip_root)/IMAGES,odm)
+ 	$(hide) $(call fs_config,$(zip_root)/ODM,odm/) > $(zip_root)/META/odm_filesystem_config.txt
+ endif
++endif
+ ifdef BUILDING_VENDOR_DLKM_IMAGE
+ 	$(hide)$(call copy-image-and-generate-map,$(BUILT_VENDOR_DLKMIMAGE_TARGET),$(zip_root)/IMAGES,vendor_dlkm)
+ 	$(hide) $(call fs_config,$(zip_root)/VENDOR_DLKM,vendor_dlkm/) > $(zip_root)/META/vendor_dlkm_filesystem_config.txt
+@@ -7237,12 +7438,23 @@ endif
+ 	rm -rf $(zip_root)/META/dynamic_partitions_info.txt
+ ifeq (true,$(PRODUCT_USE_DYNAMIC_PARTITIONS))
+ 	$(call dump-dynamic-partitions-info, $(zip_root)/META/dynamic_partitions_info.txt)
++endif
++ifdef BOARD_PREBUILT_VBMETAIMAGE
++	$(hide) mkdir -p $(zip_root)/IMAGES
++	$(hide) cp $(INSTALLED_VBMETAIMAGE_TARGET) $(zip_root)/IMAGES/vbmeta.img
+ endif
+ 	PATH=$(INTERNAL_USERIMAGES_BINARY_PATHS):$$PATH MKBOOTIMG=$(MKBOOTIMG) \
+ 	    $(ADD_IMG_TO_TARGET_FILES) -a -v -p $(HOST_OUT) $(zip_root)
++ifdef BOARD_PREBUILT_VBMETAIMAGE
++	$(hide) $(VERIFY_PREBUILT_VBMETA) $(PREBUILT_VBMETA_VERIFY_ARGS) \
++	    --image $(INSTALLED_VBMETAIMAGE_TARGET) --target-files $(zip_root)
++endif
+ ifeq ($(BUILD_QEMU_IMAGES),true)
+ 	$(hide) AVBTOOL=$(AVBTOOL) $(MK_VBMETA_BOOT_KERNEL_CMDLINE_SH) $(zip_root)/IMAGES/vbmeta.img \
+ 	    $(zip_root)/IMAGES/system.img $(zip_root)/IMAGES/VerifiedBootParams.textproto
++endif
++ifdef BOARD_VENDOR_EROFS_STOCK_IMAGE
++	$(hide) $(call verify-managed-vendor-target-files,--target-files $(zip_root))
+ endif
+ 	@# Zip everything up, preserving symlinks and placing META/ files first to
+ 	@# help early validation of the .zip file while uploading it.
+@@ -7251,7 +7463,16 @@ endif
+ 
+ $(BUILT_TARGET_FILES_PACKAGE): $(BUILT_TARGET_FILES_DIR)
+ 	@echo "Packaging target files: $@"
++ifdef BOARD_VENDOR_EROFS_STOCK_IMAGE
++	$(hide) $(SOONG_ZIP) -d -o $@.vendor.tmp -C $(zip_root) -r $@.list -sha256
++	$(hide) $(call verify-managed-vendor-target-files,--target-files-zip $@.vendor.tmp)
++ifdef BOARD_PREBUILT_VBMETAIMAGE
++	$(hide) $(VERIFY_PREBUILT_VBMETA) $(PREBUILT_VBMETA_VERIFY_ARGS) --target-files-zip $@.vendor.tmp
++endif
++	$(hide) mv $@.vendor.tmp $@
++else
+ 	$(hide) $(SOONG_ZIP) -d -o $@ -C $(zip_root) -r $@.list -sha256
++endif
+ 
+ .PHONY: target-files-package
+ target-files-package: $(BUILT_TARGET_FILES_PACKAGE)
+@@ -7263,6 +7484,9 @@ target-files-package-soong-diff-test: target-files-package
+ target-files-dir: $(BUILT_TARGET_FILES_DIR)
+ 
+ $(call declare-1p-container,$(BUILT_TARGET_FILES_PACKAGE),)
++ifdef BOARD_VENDOR_EROFS_STOCK_IMAGE
++$(call declare-container-license-deps,$(BUILT_TARGET_FILES_PACKAGE),$(INSTALLED_VENDORIMAGE_TARGET) $(POPSICLE_VENDOR_RAW) $(POPSICLE_VENDOR_INPUTS) $(POPSICLE_PREBUILT_INPUTS),$(PRODUCT_OUT)/:/)
++endif
+ $(call declare-container-license-deps,$(BUILT_TARGET_FILES_PACKAGE), $(INSTALLED_RADIOIMAGE_TARGET) \
+             $(INSTALLED_RECOVERYIMAGE_TARGET) \
+             $(INSTALLED_CACHEIMAGE_TARGET) \
+diff --git a/core/board_config.mk b/core/board_config.mk
+index 5d012c0..42627d5 100644
+--- a/core/board_config.mk
++++ b/core/board_config.mk
+@@ -130,6 +130,8 @@ _board_strip_readonly_list += BOARD_COPY_BOOT_IMAGE_TO_TARGET_FILES
+ 
+ # Prebuilt image variables
+ _board_strip_readonly_list += BOARD_PREBUILT_INIT_BOOT_IMAGE
++# Preserve existing AVB metadata on explicitly selected immutable prebuilts.
++_board_strip_readonly_list += BOARD_AVB_PRESERVE_PREBUILT_IMAGES
+ 
+ # Defines the list of logical vendor ramdisk names to build or include in vendor_boot.
+ _board_strip_readonly_list += BOARD_VENDOR_RAMDISK_FRAGMENTS
+@@ -322,6 +324,18 @@ ifdef TARGET_2ND_ARCH
+   include $(BUILD_SYSTEM)/combo/select.mk
+ endif
+ 
++ifneq ($(BOARD_AVB_PRESERVE_PREBUILT_IMAGES),)
++  ifneq ($(BOARD_AVB_ENABLE),true)
++    $(error BOARD_AVB_PRESERVE_PREBUILT_IMAGES requires BOARD_AVB_ENABLE=true)
++  endif
++  ifneq ($(filter-out boot dtbo vendor_boot,$(BOARD_AVB_PRESERVE_PREBUILT_IMAGES)),)
++    $(error Unsupported partition in BOARD_AVB_PRESERVE_PREBUILT_IMAGES)
++  endif
++  $(foreach partition,$(BOARD_AVB_PRESERVE_PREBUILT_IMAGES), \
++    $(if $(BOARD_PREBUILT_$(call to-upper,$(partition))IMAGE),, \
++      $(error AVB preservation requires a prebuilt $(partition) image)))
++endif
++
+ .KATI_READONLY := $(_board_strip_readonly_list)
+ 
+ INTERNAL_KERNEL_CMDLINE := $(BOARD_KERNEL_CMDLINE)
+@@ -538,6 +552,11 @@ ifdef BOARD_BOOT_HEADER_VERSION
+     endif
+   endif
+ endif
++ifneq ($(filter vendor_boot,$(BOARD_AVB_PRESERVE_PREBUILT_IMAGES)),)
++  ifeq ($(BUILDING_VENDOR_BOOT_IMAGE),true)
++    $(error Preserving vendor_boot requires PRODUCT_BUILD_VENDOR_BOOT_IMAGE=false)
++  endif
++endif
+ .KATI_READONLY := BUILDING_VENDOR_BOOT_IMAGE
+ 
+ # Are we building a vendor kernel boot image
+@@ -659,6 +678,30 @@ ifeq ($(PRODUCT_BUILD_VBMETA_IMAGE),false)
+ endif
+ .KATI_READONLY := BUILDING_VBMETA_IMAGE
+ 
++ifdef BOARD_PREBUILT_VBMETAIMAGE
++  ifneq ($(BOARD_AVB_ENABLE),true)
++    $(error Pinned top-level vbmeta requires AVB enabled)
++  endif
++  ifneq ($(BUILDING_VBMETA_IMAGE),true)
++    $(error Pinned top-level vbmeta requires the vbmeta image target)
++  endif
++  ifneq ($(BUILDING_INIT_BOOT_IMAGE),true)
++    $(error Pinned top-level vbmeta requires the source-built init_boot target)
++  endif
++  ifdef BOARD_PREBUILT_INIT_BOOT_IMAGE
++    $(error Pinned top-level vbmeta requires the current source-built ramdisk)
++  endif
++  ifeq ($(BOARD_PREBUILT_VBMETA_WITNESS),)
++    $(error Pinned top-level vbmeta requires its immutable official witness)
++  endif
++  ifeq ($(BOARD_VBMETAIMAGE_PARTITION_SIZE),)
++    $(error Pinned top-level vbmeta requires the actual partition size)
++  endif
++  ifeq ($(BOARD_PREBUILT_VBMETA_ALGORITHM),)
++    $(error Pinned top-level vbmeta requires its actual signature algorithm)
++  endif
++endif
++
+ # Are we building a super_empty image, it should also respect PRODUCT_BUILD_SUPER_PARTITION
+ BUILDING_SUPER_EMPTY_IMAGE :=
+ ifeq (true,$(PRODUCT_BUILD_SUPER_PARTITION))
+diff --git a/core/popsicle_firmware_filesystems.mk b/core/popsicle_firmware_filesystems.mk
+new file mode 100644
+index 0000000..349c279
+--- /dev/null
++++ b/core/popsicle_firmware_filesystems.mk
+@@ -0,0 +1,249 @@
++# SPDX-License-Identifier: Apache-2.0
++# Included only for the explicit managed OEM vendor derivation.
++ifeq ($(filter user userdebug,$(TARGET_BUILD_VARIANT)),)
++  $(error Managed OEM vendor derivation requires user or userdebug)
++endif
++ifneq ($(BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE),erofs)
++  $(error Managed OEM vendor derivation requires EROFS)
++endif
++ifneq ($(BOARD_AVB_ENABLE),true)
++  $(error Managed OEM vendor derivation requires AVB)
++endif
++ifneq ($(strip $(BOARD_PREBUILT_VENDORIMAGE)),)
++  $(error Managed OEM vendor derivation conflicts with BOARD_PREBUILT_VENDORIMAGE)
++endif
++ifneq ($(strip $(BOARD_AVB_VENDOR_KEY_PATH)$(BOARD_AVB_VENDOR_ALGORITHM)),)
++  $(error Managed standalone vendor must not request a standard top-level vendor AVB chain)
++endif
++ifeq ($(strip $(BOARD_VENDOR_EROFS_FSTAB)),)
++  $(error Managed OEM vendor derivation requires BOARD_VENDOR_EROFS_FSTAB)
++endif
++ifeq ($(strip $(BOARD_VENDOR_EROFS_AVB_PUBLIC_KEY)),)
++  $(error Managed OEM vendor derivation requires BOARD_VENDOR_EROFS_AVB_PUBLIC_KEY)
++endif
++ifeq ($(strip $(BOARD_VENDOR_EROFS_AVB_KEY_PATH)),)
++  $(error Managed OEM vendor derivation requires a vendor signing key)
++endif
++ifeq ($(filter-out NONE,$(BOARD_VENDOR_EROFS_AVB_ALGORITHM)),)
++  $(error Managed OEM vendor derivation requires a signed vendor algorithm)
++endif
++
++POPSICLE_VENDOR_TOOL := $(HOST_OUT_EXECUTABLES)/popsicle_derive_vendor
++POPSICLE_VENDOR_READER := $(HOST_OUT_EXECUTABLES)/popsicle_erofs_readback
++POPSICLE_VENDOR_DESCRIPTOR := $(TARGET_OUT_VENDOR)/etc/tracing_descriptors.gz
++POPSICLE_VENDOR_RAW := $(vendorimage_intermediates)/vendor.erofs
++POPSICLE_VENDOR_HOST_DEPS := $(POPSICLE_VENDOR_TOOL) $(POPSICLE_VENDOR_READER) \
++    $(HOST_OUT_EXECUTABLES)/mkfs.erofs $(HOST_OUT_EXECUTABLES)/fsck.erofs \
++    $(AVBTOOL) $(HOST_OUT_EXECUTABLES)/avb_openssl $(HOST_OUT_EXECUTABLES)/fec
++POPSICLE_VENDOR_INPUTS := $(BOARD_VENDOR_EROFS_STOCK_IMAGE) $(POPSICLE_VENDOR_DESCRIPTOR) \
++    $(BOARD_VENDOR_EROFS_FSTAB) $(BOARD_VENDOR_EROFS_AVB_PUBLIC_KEY) $(BOARD_VENDOR_EROFS_AVB_KEY_PATH)
++POPSICLE_VENDOR_SOURCE_ARGS = --reader $(POPSICLE_VENDOR_READER) \
++    --stock $(BOARD_VENDOR_EROFS_STOCK_IMAGE) --descriptor $(POPSICLE_VENDOR_DESCRIPTOR) \
++    --fstab $(BOARD_VENDOR_EROFS_FSTAB)
++
++# The retained init service and policy already require this exact entrypoint
++# label. Use the same checked derivation for raw images and target-files gates.
++ifeq ($(BOARD_VENDOR_EROFS_REPAIR_AMBIENT_LABEL),true)
++POPSICLE_VENDOR_SOURCE_ARGS += --repair-ambient-label
++endif
++
++ifeq ($(BOARD_VENDOR_EROFS_MERGE_NOTICE),true)
++POPSICLE_VENDOR_SOURCE_ARGS += --source-notice $(TARGET_OUT_VENDOR)/etc/NOTICE.xml.gz
++POPSICLE_VENDOR_INPUTS += $(TARGET_OUT_VENDOR)/etc/NOTICE.xml.gz
++endif
++
++# Resolve only the actual product file list against reviewed module outputs.
++ifeq ($(BOARD_VENDOR_EROFS_PRODUCT_STAGE),true)
++POPSICLE_VENDOR_STAGE_ARGS := --stage $(TARGET_OUT_VENDOR) \
++    --stage-file-list $(vendorimage_intermediates)/file_list.txt \
++    --stage-fs-config $(HOST_OUT_EXECUTABLES)/fs_config --stage-target-out $(TARGET_OUT) \
++    --stage-selabel-lookup $(HOST_OUT_EXECUTABLES)/popsicle_selabel_lookup \
++    --stage-file-contexts $(SELINUX_FC)
++POPSICLE_VENDOR_HOST_DEPS += $(HOST_OUT_EXECUTABLES)/fs_config $(HOST_OUT_EXECUTABLES)/popsicle_selabel_lookup
++POPSICLE_VENDOR_INPUTS += $(SELINUX_FC) \
++    $(filter %/etc/fs_config_dirs %/etc/fs_config_files,$(ALL_DEFAULT_INSTALLED_MODULES))
++# Each entry is an exact product path and its reviewed module, not a path exemption.
++# CAS V1 manifest/rc/VINTF and signing identities match the reviewed product
++# contract. Its sole CAS plugin and both protobuf outputs stay on the same source ABI.
++POPSICLE_VENDOR_STAGE_MODULES := \
++    etc/build_flags.json:build_flag_vendor \
++    etc/vintf/compatibility_matrix.xml:vendor_compatibility_matrix.xml \
++    bin/sh:sh_vendor \
++    bin/awk:awk_vendor \
++    bin/boringssl_self_test64:boringssl_self_test_vendor \
++    bin/dumpsys:dumpsys_vendor \
++    bin/logwrapper:logwrapper_vendor \
++    bin/toolbox:toolbox_vendor \
++    bin/toybox_vendor:toybox_vendor \
++    lib64/libz.so:libz.vendor \
++    lib64/libc++.so:libc++.vendor \
++    lib64/libbinder.so:libbinder.vendor \
++    lib64/libbinderdebug.so:libbinderdebug.vendor \
++    lib64/libcutils.so:libcutils.vendor \
++    lib64/libutils.so:libutils.vendor \
++    lib64/libhidlbase.so:libhidlbase.vendor \
++    lib64/libaconfig_storage_read_api_cc.so:libaconfig_storage_read_api_cc.vendor \
++    lib64/server_configurable_flags.so:server_configurable_flags.vendor \
++    lib64/libspeexresampler.so:libspeexresampler.vendor \
++    lib64/libmedia_helper.so:libmedia_helper.vendor \
++    lib64/libtinyxml2.so:libtinyxml2.vendor \
++    lib64/libeffectsconfig.so:libeffectsconfig.vendor \
++    lib64/android.hardware.radio@1.0.so:android.hardware.radio@1.0.vendor \
++    lib64/android.hardware.radio@1.1.so:android.hardware.radio@1.1.vendor \
++    lib64/libril.so:libril \
++    lib64/librilutils.so:librilutils \
++    lib64/libreference-ril.so:libreference-ril \
++    lib64/libhardware_legacy.so:libhardware_legacy.vendor \
++    lib64/android.system.suspend-V1-ndk.so:android.system.suspend-V1-ndk.vendor \
++    lib64/libstagefright_foundation.so:libstagefright_foundation.vendor \
++    lib64/mediadrm/libdrmclearkeyplugin.so:libdrmclearkeyplugin \
++    lib64/libeffects.so:libeffects \
++    lib64/libvibratorutils.so:libvibratorutils.vendor \
++    lib64/soundfx/libhapticgenerator.so:libhapticgenerator \
++    lib64/soundfx/libaudiopreprocessing.so:libaudiopreprocessing \
++    lib64/soundfx/libeffectproxy.so:libeffectproxy \
++    lib64/hw/audio.primary.default.so:audio.primary.default \
++    lib64/hw/gralloc.default.so:gralloc.default \
++    lib64/hw/local_time.default.so:local_time.default \
++    lib64/hw/power.default.so:power.default \
++    lib64/hw/vibrator.default.so:vibrator.default \
++    etc/bpf/filterPowerSupplyEvents.o:filterPowerSupplyEvents.o_filterPowerSupplyEvents.o \
++    lib64/soundfx/libbundlewrapper.so:libbundlewrapper \
++    lib64/soundfx/libreverbwrapper.so:libreverbwrapper \
++    lib64/soundfx/libvisualizer.so:libvisualizer \
++    lib64/soundfx/libdownmix.so:libdownmix \
++    lib64/soundfx/libdynproc.so:libdynproc \
++    lib64/soundfx/libldnhncr.so:libldnhncr \
++    apex/com.android.hardware.cas.apex:com.android.hardware.cas \
++    lib64/mediacas/libclearkeycasplugin.so:libclearkeycasplugin \
++    lib64/libprotobuf-cpp-full-6.33.5.so:libprotobuf-cpp-full.vendor \
++    lib64/libprotobuf-cpp-lite-6.33.5.so:libprotobuf-cpp-lite.vendor \
++    etc/res/values/charger/animation.txt:custom_charger_animation_vendor \
++    etc/res/images/charger/battery_fail.png:charger_battery_fail_vendor \
++    etc/res/images/charger/battery_scale.png:charger_battery_scale_vendor \
++    etc/res/images/charger/main_font.png:charger_font_vendor
++
++# Match base_vendor.mk: this performance setup script belongs to debug builds.
++ifeq ($(TARGET_BUILD_VARIANT),userdebug)
++POPSICLE_VENDOR_STAGE_MODULES += bin/perf-setup.sh:perf-setup-sh
++else
++ifneq ($(filter $(TARGET_OUT_VENDOR)/bin/perf-setup.sh,$(INTERNAL_VENDORIMAGE_FILES)),)
++$(error The user vendor stage must not install debug perf-setup-sh)
++endif
++endif
++
++define popsicle-register-stage-module
++$(if $(filter $(TARGET_OUT_VENDOR)/$(1),$(INTERNAL_VENDORIMAGE_FILES)),,$(error Reviewed stage module $(2) is not installed at $(1)))
++$(if $(filter 1,$(words $(filter %:$(TARGET_OUT_VENDOR)/$(1),$(ALL_MODULES.$(2).BUILT_INSTALLED)))),,$(error Expected one build/install edge for $(2) at $(1)))
++POPSICLE_VENDOR_STAGE_ARGS += --stage-source $(1)=$(word 1,$(subst :, ,$(filter %:$(TARGET_OUT_VENDOR)/$(1),$(ALL_MODULES.$(2).BUILT_INSTALLED))))
++POPSICLE_VENDOR_INPUTS += $(word 1,$(subst :, ,$(filter %:$(TARGET_OUT_VENDOR)/$(1),$(ALL_MODULES.$(2).BUILT_INSTALLED))))
++endef
++$(foreach entry,$(POPSICLE_VENDOR_STAGE_MODULES),$(eval $(call popsicle-register-stage-module,$(word 1,$(subst :, ,$(entry))),$(word 2,$(subst :, ,$(entry))))))
++POPSICLE_VENDOR_SOURCE_ARGS += $(POPSICLE_VENDOR_STAGE_ARGS)
++endif
++
++# This opt-in must match the Soong policy provider. Metadata and AVB production
++# remain available for trees without this policy provider.
++ifeq ($(SOONG_CONFIG_popsicle_managed_vendor_policy),true)
++POPSICLE_POLICY_WORKSPACE := $(vendorimage_intermediates)/strict-policy-work
++POPSICLE_POLICY_SELINUX := $(TARGET_OUT)/etc/selinux
++POPSICLE_POLICY_SYSTEM_EXT := $(TARGET_OUT_SYSTEM_EXT)/etc/selinux
++POPSICLE_POLICY_PRODUCT := $(TARGET_OUT_PRODUCT)/etc/selinux
++POPSICLE_POLICY_NAMED_INPUTS := \
++    plat=$(POPSICLE_POLICY_SELINUX)/plat_sepolicy.cil \
++    plat-map=$(POPSICLE_POLICY_SELINUX)/mapping/202504.cil \
++    plat-compat=$(POPSICLE_POLICY_SELINUX)/mapping/202504.compat.cil \
++    system-ext=$(POPSICLE_POLICY_SYSTEM_EXT)/system_ext_sepolicy.cil \
++    system-ext-map=$(POPSICLE_POLICY_SYSTEM_EXT)/mapping/202504.cil \
++    system-ext-compat=$(POPSICLE_POLICY_SYSTEM_EXT)/mapping/202504.compat.cil \
++    product=$(POPSICLE_POLICY_PRODUCT)/product_sepolicy.cil \
++    product-map=$(POPSICLE_POLICY_PRODUCT)/mapping/202504.cil \
++    genfs=$(POPSICLE_POLICY_SELINUX)/plat_sepolicy_genfs_202504.cil \
++    plat-hash=$(POPSICLE_POLICY_SELINUX)/plat_sepolicy_and_mapping.sha256 \
++    system-ext-hash=$(POPSICLE_POLICY_SYSTEM_EXT)/system_ext_sepolicy_and_mapping.sha256 \
++    product-hash=$(POPSICLE_POLICY_PRODUCT)/product_sepolicy_and_mapping.sha256 \
++    odm-stock=$(if $(BOARD_ODM_EROFS_STOCK_IMAGE),$(BOARD_ODM_EROFS_STOCK_IMAGE),$(BOARD_PREBUILT_ODMIMAGE)) \
++    macros=system/sepolicy/public/te_macros \
++    global-macros=system/sepolicy/public/global_macros \
++    codec-source=external/erofs-utils/popsicle/policy-producers/mediacodec.te \
++    m4=prebuilts/build-tools/$(HOST_PREBUILT_TAG)/bin/m4 secilc=$(HOST_OUT_EXECUTABLES)/secilc
++POPSICLE_POLICY_DEPS := $(foreach input,$(POPSICLE_POLICY_NAMED_INPUTS),$(word 2,$(subst =, ,$(input))))
++POPSICLE_VENDOR_POLICY_ARGS = --build-variant $(TARGET_BUILD_VARIANT) $(foreach input,$(POPSICLE_POLICY_NAMED_INPUTS),--policy-input $(input)) \
++    --policy-input workspace=$(POPSICLE_POLICY_WORKSPACE)
++POPSICLE_VENDOR_SOURCE_ARGS += $(POPSICLE_VENDOR_POLICY_ARGS)
++POPSICLE_VENDOR_INPUTS += $(POPSICLE_POLICY_DEPS)
++endif
++POPSICLE_VENDOR_AVB_ARGS = --reader $(POPSICLE_VENDOR_READER) \
++    --stock $(BOARD_VENDOR_EROFS_STOCK_IMAGE) --raw $(POPSICLE_VENDOR_RAW) \
++    --key $(BOARD_VENDOR_EROFS_AVB_KEY_PATH) --public-key $(BOARD_VENDOR_EROFS_AVB_PUBLIC_KEY) \
++    --algorithm $(BOARD_VENDOR_EROFS_AVB_ALGORITHM) --fec $(HOST_OUT_EXECUTABLES)/fec
++
++# These remain untouched official images. Their filesystem views are read from
++# the same raw inputs, rather than from the incomplete generated staging trees.
++POPSICLE_PREBUILT_PARTITIONS := $(foreach p,ODM SYSTEM_DLKM VENDOR_DLKM,$(if $(BOARD_PREBUILT_$(p)IMAGE),$(p)))
++POPSICLE_PREBUILT_NAME_ODM := odm
++POPSICLE_PREBUILT_NAME_SYSTEM_DLKM := system_dlkm
++POPSICLE_PREBUILT_NAME_VENDOR_DLKM := vendor_dlkm
++# Installed image targets are declared later in core/Makefile. Keep these lazy.
++POPSICLE_PREBUILT_INPUTS = $(foreach p,$(POPSICLE_PREBUILT_PARTITIONS),\
++    $(BOARD_PREBUILT_$(p)IMAGE) $(INSTALLED_$(p)IMAGE_TARGET) \
++    $(filter $(TARGET_OUT_$(p))/%,$(ALL_DEFAULT_INSTALLED_MODULES)))
++
++define popsicle-prebuilt-source-args
++  --reader $(POPSICLE_VENDOR_READER) --fsck $(HOST_OUT_EXECUTABLES)/fsck.erofs \
++      --partition $(POPSICLE_PREBUILT_NAME_$(1)) --stock $(BOARD_PREBUILT_$(1)IMAGE) \
++      --image $(INSTALLED_$(1)IMAGE_TARGET) --stage $(TARGET_OUT_$(1))
++endef
++
++define export-prebuilt-target-files
++  mkdir -p $(2)/META
++  $(POPSICLE_VENDOR_TOOL) export-prebuilt $(call popsicle-prebuilt-source-args,$(1)) --target-files $(2)
++endef
++
++define verify-prebuilt-target-files
++  $(POPSICLE_VENDOR_TOOL) verify-prebuilt-target-files $(call popsicle-prebuilt-source-args,$(1)) $(2)
++endef
++
++$(POPSICLE_VENDOR_RAW): $(POPSICLE_VENDOR_HOST_DEPS) $(POPSICLE_VENDOR_INPUTS) \
++    $(INTERNAL_VENDORIMAGE_FILES) $(vendorimage_intermediates)/file_list.txt
++	@mkdir -p $(dir $@)
++	$(if $(POPSICLE_POLICY_WORKSPACE),mkdir -p $(POPSICLE_POLICY_WORKSPACE))
++	$(POPSICLE_VENDOR_TOOL) audit-stage $(POPSICLE_VENDOR_SOURCE_ARGS) $(if $(POPSICLE_VENDOR_STAGE_ARGS),,--stage $(TARGET_OUT_VENDOR))
++	rm -f $@.tmp
++	$(POPSICLE_VENDOR_TOOL) derive $(POPSICLE_VENDOR_SOURCE_ARGS) \
++	    --mkfs $(HOST_OUT_EXECUTABLES)/mkfs.erofs --fsck $(HOST_OUT_EXECUTABLES)/fsck.erofs --output $@.tmp
++	mv $@.tmp $@
++
++$(call declare-container-license-metadata,$(POPSICLE_VENDOR_RAW),legacy_proprietary,proprietary,,"Managed Vendor Filesystem",vendor)
++$(call declare-container-license-deps,$(POPSICLE_VENDOR_RAW),$(POPSICLE_VENDOR_INPUTS) $(POPSICLE_VENDOR_HOST_DEPS),$(PRODUCT_OUT)/:/)
++
++define build-managed-vendorimage-target
++  $(call pretty,"Target managed vendor image: $(INSTALLED_VENDORIMAGE_TARGET)")
++  @mkdir -p $(vendorimage_intermediates)
++  @rm -f $(vendorimage_intermediates)/vendor_image_info.txt $(INSTALLED_VENDORIMAGE_TARGET).avb.tmp
++  $(call generate-image-prop-dictionary,$(vendorimage_intermediates)/vendor_image_info.txt,vendor)
++  echo "avb_enable=$(BOARD_AVB_ENABLE)" >> $(vendorimage_intermediates)/vendor_image_info.txt
++  echo "avb_vendor_key_path=$(BOARD_VENDOR_EROFS_AVB_KEY_PATH)" >> $(vendorimage_intermediates)/vendor_image_info.txt
++  echo "avb_vendor_algorithm=$(BOARD_VENDOR_EROFS_AVB_ALGORITHM)" >> $(vendorimage_intermediates)/vendor_image_info.txt
++  PATH=$(INTERNAL_USERIMAGES_BINARY_PATHS):$$PATH \
++      $(POPSICLE_VENDOR_TOOL) seal $(POPSICLE_VENDOR_AVB_ARGS) --avbtool $(AVBTOOL) \
++          --image-info $(vendorimage_intermediates)/vendor_image_info.txt \
++          --output $(INSTALLED_VENDORIMAGE_TARGET).avb.tmp
++  mv $(INSTALLED_VENDORIMAGE_TARGET).avb.tmp $(INSTALLED_VENDORIMAGE_TARGET)
++  $(call assert-max-image-size,$(INSTALLED_VENDORIMAGE_TARGET),$(BOARD_VENDORIMAGE_PARTITION_SIZE))
++endef
++
++define verify-managed-vendor-target-files
++  $(POPSICLE_VENDOR_TOOL) audit-stage $(POPSICLE_VENDOR_SOURCE_ARGS) $(if $(POPSICLE_VENDOR_STAGE_ARGS),,--stage $(TARGET_OUT_VENDOR))
++  $(POPSICLE_VENDOR_TOOL) verify $(POPSICLE_VENDOR_SOURCE_ARGS) \
++      --fsck $(HOST_OUT_EXECUTABLES)/fsck.erofs --output $(POPSICLE_VENDOR_RAW)
++  $(POPSICLE_VENDOR_TOOL) verify-avb $(POPSICLE_VENDOR_AVB_ARGS) --image $(INSTALLED_VENDORIMAGE_TARGET)
++  $(POPSICLE_VENDOR_TOOL) verify-target-files --reader $(POPSICLE_VENDOR_READER) \
++      --stock $(BOARD_VENDOR_EROFS_STOCK_IMAGE) --image $(INSTALLED_VENDORIMAGE_TARGET) --key $(BOARD_VENDOR_EROFS_AVB_KEY_PATH) \
++      --public-key $(BOARD_VENDOR_EROFS_AVB_PUBLIC_KEY) --fec $(HOST_OUT_EXECUTABLES)/fec \
++      $(POPSICLE_VENDOR_POLICY_ARGS) $(1)
++  $(if $(BOARD_ODM_EROFS_STOCK_IMAGE),$(call verify-managed-odm-target-files,$(1)))
++  $(if $(filter ODM,$(POPSICLE_PREBUILT_PARTITIONS)),$(call verify-prebuilt-target-files,ODM,$(1)))
++  $(if $(filter SYSTEM_DLKM,$(POPSICLE_PREBUILT_PARTITIONS)),$(call verify-prebuilt-target-files,SYSTEM_DLKM,$(1)))
++  $(if $(filter VENDOR_DLKM,$(POPSICLE_PREBUILT_PARTITIONS)),$(call verify-prebuilt-target-files,VENDOR_DLKM,$(1)))
++endef
+diff --git a/core/popsicle_odm_filesystems.mk b/core/popsicle_odm_filesystems.mk
+new file mode 100644
+index 0000000..4344e2b
+--- /dev/null
++++ b/core/popsicle_odm_filesystems.mk
+@@ -0,0 +1,96 @@
++# SPDX-License-Identifier: Apache-2.0
++# Included at the normal ODM image target after its actual install list exists.
++ifeq ($(filter user:erofs:true userdebug:erofs:true,$(TARGET_BUILD_VARIANT):$(BOARD_ODMIMAGE_FILE_SYSTEM_TYPE):$(BOARD_AVB_ENABLE)),)
++  $(error Managed camera ODM requires user or userdebug EROFS and AVB)
++endif
++ifeq ($(strip $(BOARD_VENDOR_EROFS_STOCK_IMAGE)),)
++  $(error Managed camera ODM requires the matching managed vendor trust contract)
++endif
++ifneq ($(strip $(BOARD_PREBUILT_ODMIMAGE)$(BOARD_AVB_ODM_KEY_PATH)$(BOARD_AVB_ODM_ALGORITHM)),)
++  $(error Managed camera ODM conflicts with prebuilt copy or top-level AVB chaining)
++endif
++ifeq ($(strip $(BOARD_ODM_EROFS_ID_BUFFER_PATCH)),)
++  $(error Managed camera ODM requires its original guarded ID-buffer transform)
++endif
++ifeq ($(strip $(BOARD_ODM_EROFS_DEVICE_CONFIG_PATCH)),)
++  $(error Managed camera ODM requires its original guarded device-config transform)
++endif
++
++ifeq ($(strip $(BOARD_ODM_EROFS_EXTENSION_CONFIG_PATCH)),)
++  $(error Managed camera ODM requires its guarded extension-config transform)
++endif
++
++POPSICLE_ODM_TOOL := $(HOST_OUT_EXECUTABLES)/popsicle_derive_odm
++POPSICLE_ODM_RAW := $(odmimage_intermediates)/odm.erofs
++POPSICLE_ODM_HOST_DEPS := $(POPSICLE_ODM_TOOL) $(POPSICLE_VENDOR_READER) \
++    $(HOST_OUT_EXECUTABLES)/mkfs.erofs $(HOST_OUT_EXECUTABLES)/fsck.erofs \
++    $(AVBTOOL) $(HOST_OUT_EXECUTABLES)/avb_openssl $(HOST_OUT_EXECUTABLES)/fec \
++    $(HOST_OUT_EXECUTABLES)/fs_config $(HOST_OUT_EXECUTABLES)/popsicle_selabel_lookup
++POPSICLE_ODM_INPUTS := $(BOARD_ODM_EROFS_STOCK_IMAGE) \
++    $(BOARD_ODM_EROFS_ID_BUFFER_PATCH) $(BOARD_ODM_EROFS_DEVICE_CONFIG_PATCH) \
++    $(BOARD_ODM_EROFS_EXTENSION_CONFIG_PATCH) \
++    $(BOARD_VENDOR_EROFS_AVB_KEY_PATH) $(BOARD_VENDOR_EROFS_AVB_PUBLIC_KEY) \
++    $(odmimage_intermediates)/file_list.txt $(SELINUX_FC) \
++    $(filter %/etc/fs_config_dirs %/etc/fs_config_files,$(ALL_DEFAULT_INSTALLED_MODULES))
++# Every product path consumes the same selected-stage contract. Camera/NOTICE
++# are the only guarded differences; there is no generic ODM source allowlist.
++POPSICLE_ODM_STAGE_ARGS := --stage $(TARGET_OUT_ODM) \
++    --stage-file-list $(odmimage_intermediates)/file_list.txt \
++    --stage-fs-config $(HOST_OUT_EXECUTABLES)/fs_config --stage-target-out $(TARGET_OUT) \
++    --stage-selabel-lookup $(HOST_OUT_EXECUTABLES)/popsicle_selabel_lookup \
++    --stage-file-contexts $(SELINUX_FC)
++POPSICLE_ODM_SOURCE_ARGS := --reader $(POPSICLE_VENDOR_READER) \
++    --fsck $(HOST_OUT_EXECUTABLES)/fsck.erofs --stock $(BOARD_ODM_EROFS_STOCK_IMAGE) \
++    --id-buffer-patch $(BOARD_ODM_EROFS_ID_BUFFER_PATCH) \
++    --device-config-patch $(BOARD_ODM_EROFS_DEVICE_CONFIG_PATCH) \
++    --extension-config-patch $(BOARD_ODM_EROFS_EXTENSION_CONFIG_PATCH) $(POPSICLE_ODM_STAGE_ARGS)
++ifeq ($(BOARD_ODM_EROFS_MERGE_NOTICE),true)
++POPSICLE_ODM_SOURCE_ARGS += --source-notice $(TARGET_OUT_ODM)/etc/NOTICE.xml.gz
++POPSICLE_ODM_INPUTS += $(TARGET_OUT_ODM)/etc/NOTICE.xml.gz
++endif
++POPSICLE_ODM_SIGNING_ARGS := --key $(BOARD_VENDOR_EROFS_AVB_KEY_PATH) \
++    --public-key $(BOARD_VENDOR_EROFS_AVB_PUBLIC_KEY) \
++    --algorithm $(BOARD_VENDOR_EROFS_AVB_ALGORITHM) --fec $(HOST_OUT_EXECUTABLES)/fec
++POPSICLE_ODM_VERIFY_ARGS = $(POPSICLE_ODM_SOURCE_ARGS) $(POPSICLE_ODM_SIGNING_ARGS) \
++    --raw $(POPSICLE_ODM_RAW) --image $(INSTALLED_ODMIMAGE_TARGET)
++
++$(POPSICLE_ODM_RAW): $(POPSICLE_ODM_HOST_DEPS) $(POPSICLE_ODM_INPUTS) $(INTERNAL_ODMIMAGE_FILES)
++	@mkdir -p $(dir $@)
++	$(POPSICLE_ODM_TOOL) audit-stage $(POPSICLE_ODM_SOURCE_ARGS)
++	rm -f $@.tmp
++	$(POPSICLE_ODM_TOOL) derive $(POPSICLE_ODM_SOURCE_ARGS) \
++	    --mkfs $(HOST_OUT_EXECUTABLES)/mkfs.erofs --output $@.tmp
++	mv $@.tmp $@
++
++$(call declare-container-license-metadata,$(POPSICLE_ODM_RAW),legacy_proprietary,proprietary,,"Managed Camera ODM Filesystem",odm)
++$(call declare-container-license-deps,$(POPSICLE_ODM_RAW),$(POPSICLE_ODM_INPUTS) $(POPSICLE_ODM_HOST_DEPS),$(PRODUCT_OUT)/:/)
++
++define build-managed-odmimage-target
++  $(call pretty,"Target managed camera ODM image: $(INSTALLED_ODMIMAGE_TARGET)")
++  @mkdir -p $(odmimage_intermediates)
++  @rm -f $(odmimage_intermediates)/odm_image_info.txt $(INSTALLED_ODMIMAGE_TARGET).avb.tmp
++  $(call generate-image-prop-dictionary,$(odmimage_intermediates)/odm_image_info.txt,odm)
++  echo "avb_enable=$(BOARD_AVB_ENABLE)" >> $(odmimage_intermediates)/odm_image_info.txt
++  echo "avb_odm_key_path=$(BOARD_VENDOR_EROFS_AVB_KEY_PATH)" >> $(odmimage_intermediates)/odm_image_info.txt
++  echo "avb_odm_algorithm=$(BOARD_VENDOR_EROFS_AVB_ALGORITHM)" >> $(odmimage_intermediates)/odm_image_info.txt
++  PATH=$(INTERNAL_USERIMAGES_BINARY_PATHS):$$PATH \
++      $(POPSICLE_ODM_TOOL) seal $(POPSICLE_ODM_SOURCE_ARGS) $(POPSICLE_ODM_SIGNING_ARGS) \
++      --raw $(POPSICLE_ODM_RAW) --avbtool $(AVBTOOL) \
++      --image-info $(odmimage_intermediates)/odm_image_info.txt --output $(INSTALLED_ODMIMAGE_TARGET).avb.tmp
++  mv $(INSTALLED_ODMIMAGE_TARGET).avb.tmp $(INSTALLED_ODMIMAGE_TARGET)
++  $(call assert-max-image-size,$(INSTALLED_ODMIMAGE_TARGET),$(BOARD_ODMIMAGE_PARTITION_SIZE))
++endef
++
++define export-managed-odm-target-files
++  $(POPSICLE_ODM_TOOL) export $(POPSICLE_ODM_VERIFY_ARGS) --target-files $(1)
++endef
++
++define sync-managed-odm-avb-info
++  $(POPSICLE_ODM_TOOL) sync-avb-info --image $(INSTALLED_ODMIMAGE_TARGET) \
++      --image-info $(1)/META/misc_info.txt --key $(BOARD_VENDOR_EROFS_AVB_KEY_PATH) \
++      --public-key $(BOARD_VENDOR_EROFS_AVB_PUBLIC_KEY) --fec $(HOST_OUT_EXECUTABLES)/fec
++endef
++
++define verify-managed-odm-target-files
++  $(POPSICLE_ODM_TOOL) verify-target-files $(POPSICLE_ODM_VERIFY_ARGS) $(1)
++endef
+diff --git a/core/soong_config.mk b/core/soong_config.mk
+index df57832..4c8eeaa 100644
+--- a/core/soong_config.mk
++++ b/core/soong_config.mk
+@@ -363,6 +363,12 @@ $(call add_json_list, SystemExtPropFiles, $(TARGET_SYSTEM_EXT_PROP))
+ $(call add_json_list, ProductPropFiles, $(TARGET_PRODUCT_PROP))
+ $(call add_json_list, OdmPropFiles, $(TARGET_ODM_PROP))
+ $(call add_json_list, VendorPropFiles, $(TARGET_VENDOR_PROP))
++$(call add_json_str, PrebuiltVendorBuildProp, $(BOARD_PREBUILT_VENDOR_BUILD_PROP))
++$(call add_json_str, PrebuiltOdmBuildProp, $(BOARD_PREBUILT_ODM_BUILD_PROP))
++$(call add_json_str, PrebuiltOdmDlkmBuildProp, $(BOARD_PREBUILT_ODM_DLKM_BUILD_PROP))
++$(call add_json_str, PrebuiltVendorDlkmBuildProp, $(BOARD_PREBUILT_VENDOR_DLKM_BUILD_PROP))
++$(call add_json_str, PrebuiltSystemDlkmBuildProp, $(BOARD_PREBUILT_SYSTEM_DLKM_BUILD_PROP))
++$(call add_json_list, VendorPropertyBlacklist, $(PRODUCT_VENDOR_PROPERTY_BLACKLIST))
+ 
+ # Do not set ArtTargetIncludeDebugBuild into any value if PRODUCT_ART_TARGET_INCLUDE_DEBUG_BUILD is not set,
+ # to have the same behavior from runtime_libart.mk.
+@@ -719,9 +725,9 @@ else
+ endif
+ $(call add_json_list, SystemExtManifestFiles, $(SYSTEM_EXT_MANIFEST_FILES) $(SYSTEM_EXT_HWSERVICE_FILES))
+ $(call add_json_list, DeviceManifestFiles, $(DEVICE_MANIFEST_FILE))
+-$(call add_json_list, DeviceManifestSkus, $(DEVICE_MANIFEST_SKUS))
++$(call add_json_list, DeviceManifestSkus, $(if $(BOARD_VENDOR_EROFS_STOCK_IMAGE),$(BOARD_VENDOR_EROFS_MANIFEST_SKUS),$(DEVICE_MANIFEST_SKUS)))
+ $(call add_json_list, OdmManifestFiles, $(ODM_MANIFEST_FILES))
+-$(call add_json_list, OdmManifestSkus, $(ODM_MANIFEST_SKUS))
++$(call add_json_list, OdmManifestSkus, $(if $(BOARD_ODM_EROFS_STOCK_IMAGE),$(BOARD_ODM_EROFS_MANIFEST_SKUS),$(ODM_MANIFEST_SKUS)))
+ 
+ $(call add_json_map,CompatibilityTestcases)
+ $(foreach suite,$(sort $(patsubst COMPATIBILITY_TESTCASES_OUT_%,%,$(filter-out COMPATIBILITY_TESTCASES_OUT_INCLUDE_MODULE_FOLDER_%,$(filter COMPATIBILITY_TESTCASES_OUT_%,$(.VARIABLES))))),\
+diff --git a/core/sysprop.mk b/core/sysprop.mk
+index 04bc273..414a62c 100644
+--- a/core/sysprop.mk
++++ b/core/sysprop.mk
+@@ -211,6 +211,36 @@ _prop_vars_ :=
+ endif
+ 
+ INSTALLED_VENDOR_BUILD_PROP_TARGET := $(TARGET_OUT_VENDOR)/build.prop
++ifneq ($(strip $(BOARD_PREBUILT_VENDOR_BUILD_PROP)),)
++ifeq ($(filter user userdebug,$(TARGET_BUILD_VARIANT)),)
++  $(error Managed OEM vendor properties require user or userdebug)
++endif
++ifeq ($(strip $(BOARD_VENDOR_EROFS_STOCK_IMAGE)),)
++  $(error Managed OEM vendor properties require the audited official vendor image)
++endif
++ifneq ($(strip $(PRODUCT_VENDOR_PROPERTY_BLACKLIST)),)
++  $(error Managed OEM vendor properties cannot use PRODUCT_VENDOR_PROPERTY_BLACKLIST)
++endif
++ALL_DEFAULT_INSTALLED_MODULES += $(INSTALLED_VENDOR_BUILD_PROP_TARGET)
++# config.mk clears SOONG_VARIABLES/SOONG_EXTRA_VARIABLES after its dump phase.
++# Use their exact producer paths, including product and coverage suffix, in the
++# main Kati graph where this recipe and its prerequisites are emitted.
++popsicle_vendor_prop_configs := \
++    $(SOONG_OUT_DIR)/soong.$(TARGET_PRODUCT)$(COVERAGE_SUFFIX).variables \
++    $(SOONG_OUT_DIR)/soong.$(TARGET_PRODUCT)$(COVERAGE_SUFFIX).extra.variables
++$(INSTALLED_VENDOR_BUILD_PROP_TARGET): PRIVATE_VENDOR_PROP_FILES := $(_prop_files_)
++$(INSTALLED_VENDOR_BUILD_PROP_TARGET): PRIVATE_VENDOR_PROP_CONFIGS := $(popsicle_vendor_prop_configs)
++$(INSTALLED_VENDOR_BUILD_PROP_TARGET): $(HOST_OUT_EXECUTABLES)/managed_vendor_build_prop \
++    $(BOARD_PREBUILT_VENDOR_BUILD_PROP) $(_prop_files_) $(INSTALLED_BUILD_PROP_TARGET) \
++    $(popsicle_vendor_prop_configs)
++	$(HOST_OUT_EXECUTABLES)/managed_vendor_build_prop \
++	    --source $(BOARD_PREBUILT_VENDOR_BUILD_PROP) --out $@ \
++	    $(foreach file,$(PRIVATE_VENDOR_PROP_CONFIGS),--product-config $(file)) \
++	    --system-prop $(INSTALLED_BUILD_PROP_TARGET) \
++	    $(foreach file,$(PRIVATE_VENDOR_PROP_FILES),--prop-file $(file))
++$(call declare-container-license-metadata,$(INSTALLED_VENDOR_BUILD_PROP_TARGET),legacy_proprietary,proprietary,,"Official Vendor Properties",vendor)
++$(call declare-container-license-deps,$(INSTALLED_VENDOR_BUILD_PROP_TARGET),$(BOARD_PREBUILT_VENDOR_BUILD_PROP),$(PRODUCT_OUT)/:/)
++else
+ $(eval $(call build-properties,\
+     vendor,\
+     $(INSTALLED_VENDOR_BUILD_PROP_TARGET),\
+@@ -221,6 +251,7 @@ $(eval $(call build-properties,\
+     $(empty)))
+ 
+ $(eval $(call declare-1p-target,$(INSTALLED_VENDOR_BUILD_PROP_TARGET)))
++endif # BOARD_PREBUILT_VENDOR_BUILD_PROP
+ 
+ # -----------------------------------------------------------------
+ # product/etc/build.prop
+@@ -237,6 +268,14 @@ INSTALLED_PRODUCT_BUILD_PROP_TARGET := $(TARGET_OUT_PRODUCT)/etc/build.prop
+ # build/soong/Android.bp.
+ 
+ INSTALLED_ODM_BUILD_PROP_TARGET := $(TARGET_OUT_ODM)/etc/build.prop
++ifneq ($(strip $(BOARD_PREBUILT_ODM_BUILD_PROP)),)
++ifeq ($(filter user userdebug,$(TARGET_BUILD_VARIANT)),)
++  $(error Managed OEM odm properties require user or userdebug)
++endif
++ifeq ($(strip $(BOARD_PREBUILT_ODMIMAGE)$(BOARD_ODM_EROFS_STOCK_IMAGE)),)
++  $(error Managed OEM odm properties require the audited official odm image input)
++endif
++endif # BOARD_PREBUILT_ODM_BUILD_PROP
+ 
+ # ----------------------------------------------------------------
+ # vendor_dlkm/etc/build.prop
+@@ -245,8 +284,41 @@ INSTALLED_ODM_BUILD_PROP_TARGET := $(TARGET_OUT_ODM)/etc/build.prop
+ # These are built by Soong. See build/soong/Android.bp
+ 
+ INSTALLED_VENDOR_DLKM_BUILD_PROP_TARGET := $(TARGET_OUT_VENDOR_DLKM)/etc/build.prop
++ifneq ($(strip $(BOARD_PREBUILT_VENDOR_DLKM_BUILD_PROP)),)
++ifeq ($(filter user userdebug,$(TARGET_BUILD_VARIANT)),)
++  $(error Managed OEM vendor_dlkm properties require user or userdebug)
++endif
++ifeq ($(strip $(BOARD_PREBUILT_VENDOR_DLKMIMAGE)),)
++  $(error Managed OEM vendor_dlkm properties require the matching prebuilt image)
++endif
++ifneq ($(TARGET_COPY_OUT_VENDOR_DLKM),vendor_dlkm)
++  $(error Managed OEM vendor_dlkm properties require its standalone partition)
++endif
++endif # BOARD_PREBUILT_VENDOR_DLKM_BUILD_PROP
+ INSTALLED_ODM_DLKM_BUILD_PROP_TARGET := $(TARGET_OUT_ODM_DLKM)/etc/build.prop
++ifneq ($(strip $(BOARD_PREBUILT_ODM_DLKM_BUILD_PROP)),)
++ifeq ($(filter user userdebug,$(TARGET_BUILD_VARIANT)),)
++  $(error Managed OEM odm_dlkm properties require user or userdebug)
++endif
++ifeq ($(strip $(BOARD_VENDOR_EROFS_STOCK_IMAGE)),)
++  $(error Managed OEM odm_dlkm properties require the audited official vendor image)
++endif
++ifneq ($(TARGET_COPY_OUT_ODM_DLKM),$(TARGET_COPY_OUT_VENDOR)/odm_dlkm)
++  $(error Managed OEM odm_dlkm properties require the nested official vendor directory)
++endif
++endif # BOARD_PREBUILT_ODM_DLKM_BUILD_PROP
+ INSTALLED_SYSTEM_DLKM_BUILD_PROP_TARGET := $(TARGET_OUT_SYSTEM_DLKM)/etc/build.prop
++ifneq ($(strip $(BOARD_PREBUILT_SYSTEM_DLKM_BUILD_PROP)),)
++ifeq ($(filter user userdebug,$(TARGET_BUILD_VARIANT)),)
++  $(error Managed OEM system_dlkm properties require user or userdebug)
++endif
++ifeq ($(strip $(BOARD_PREBUILT_SYSTEM_DLKMIMAGE)),)
++  $(error Managed OEM system_dlkm properties require the matching prebuilt image)
++endif
++ifneq ($(TARGET_COPY_OUT_SYSTEM_DLKM),system_dlkm)
++  $(error Managed OEM system_dlkm properties require its standalone partition)
++endif
++endif # BOARD_PREBUILT_SYSTEM_DLKM_BUILD_PROP
+ ALL_DEFAULT_INSTALLED_MODULES += \
+   $(INSTALLED_VENDOR_DLKM_BUILD_PROP_TARGET) \
+   $(INSTALLED_ODM_DLKM_BUILD_PROP_TARGET) \
+diff --git a/tools/Android.bp b/tools/Android.bp
+index f1ff1c4..96285f7 100644
+--- a/tools/Android.bp
++++ b/tools/Android.bp
+@@ -121,3 +121,16 @@ python_binary_host {
+         "java-event-log-tags.py",
+     ],
+ }
++
++python_binary_host {
++    name: "verify_prebuilt_boot_image",
++    main: "verify_prebuilt_boot_image.py",
++    srcs: ["verify_prebuilt_boot_image.py"],
++}
++
++python_binary_host {
++    name: "verify_prebuilt_vbmeta",
++    srcs: ["verify_prebuilt_vbmeta.py"],
++    libs: ["libavbtool"],
++    required: ["avb_openssl"],
++}
+diff --git a/tools/releasetools/add_img_to_target_files.py b/tools/releasetools/add_img_to_target_files.py
+index a52a163..44a3a1b 100644
+--- a/tools/releasetools/add_img_to_target_files.py
++++ b/tools/releasetools/add_img_to_target_files.py
+@@ -713,6 +713,10 @@ def AddVBMeta(output_zip, partitions, name, needed_partitions):
+     logger.info("%s.img already exists; not rebuilding...", name)
+     return img.name
+ 
++  if name == "vbmeta" and OPTIONS.info_dict.get("avb_prebuilt_vbmeta") == "true":
++    raise common.ExternalError(
++        "Pinned top-level vbmeta is missing from IMAGES; restore the finalized build input")
++
+   common.BuildVBMeta(img.name, partitions, name, needed_partitions,
+                      OPTIONS.avb_resolve_rollback_index_location_conflict)
+   img.Write()
+diff --git a/tools/verify_prebuilt_boot_image.py b/tools/verify_prebuilt_boot_image.py
+new file mode 100644
+index 0000000..b3c8502
+--- /dev/null
++++ b/tools/verify_prebuilt_boot_image.py
+@@ -0,0 +1,44 @@
++#!/usr/bin/env python3
++# SPDX-License-Identifier: Apache-2.0
++"""Validate an immutable boot-family prebuilt without changing its AVB footer."""
++
++import argparse
++from pathlib import Path
++import re
++import subprocess
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--avbtool", required=True)
++    parser.add_argument("--image", required=True, type=Path)
++    parser.add_argument("--partition", required=True, choices=("boot", "dtbo", "vendor_boot"))
++    parser.add_argument("--partition-size", required=True, type=int)
++    args = parser.parse_args()
++    if args.image.name != args.partition + ".img":
++        parser.error("Validate the canonical output filename used by AVB descriptors")
++    size = args.image.stat().st_size
++    if args.partition_size <= 0 or not 0 < size <= args.partition_size:
++        parser.error("Prebuilt does not fit the declared partition size")
++    magic = {"boot": b"ANDROID!", "vendor_boot": b"VNDRBOOT", "dtbo": bytes.fromhex("d7b7ab1e")}
++    expected = magic[args.partition]
++    with args.image.open("rb") as stream:
++        if stream.read(len(expected)) != expected:
++            parser.error("Prebuilt header does not match the declared partition type")
++    info = subprocess.run(
++        [args.avbtool, "info_image", "--image", str(args.image)],
++        check=True, stdout=subprocess.PIPE, text=True,
++    ).stdout
++    # The pinned avbtool prints this field for both hash and chain descriptors.
++    # Boot-family inputs must describe exactly the partition being installed.
++    names = re.findall(r"^\s+Partition Name:\s+(\S+)\s*$", info, re.MULTILINE)
++    if names != [args.partition]:
++        parser.error("AVB descriptors do not identify exactly the declared partition")
++    subprocess.run(
++        [args.avbtool, "verify_image", "--image", str(args.image)], check=True,
++    )
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tools/verify_prebuilt_vbmeta.py b/tools/verify_prebuilt_vbmeta.py
+new file mode 100644
+index 0000000..4faf839
+--- /dev/null
++++ b/tools/verify_prebuilt_vbmeta.py
+@@ -0,0 +1,103 @@
++#!/usr/bin/env python3
++# SPDX-License-Identifier: Apache-2.0
++"""Check a pinned signed top-level vbmeta and exact copies, not its image chain."""
++
++import argparse
++from pathlib import Path
++import struct
++import zipfile
++
++import avbtool
++
++
++def validate_reference(data, algorithm, partition_size):
++    if len(data) < 256 or len(data) > partition_size:
++        raise ValueError("top-level vbmeta exceeds its partition or lacks a complete header")
++    header = avbtool.AvbVBMetaHeader(data[:256])
++    name, _ = avbtool.lookup_algorithm_by_type(header.algorithm_type)
++    if name == "NONE" or name != algorithm:
++        raise ValueError("unexpected or unsigned vbmeta algorithm")
++    if header.flags != 0:
++        raise ValueError("verification/hashtree disabling flags are not permitted")
++    auth = header.authentication_data_block_size
++    aux = header.auxiliary_data_block_size
++    if auth % 64 or aux % 64 or 256 + auth + aux > len(data):
++        raise ValueError("invalid authentication/auxiliary block bounds")
++    for offset, size, bound in (
++        (header.hash_offset, header.hash_size, auth),
++        (header.signature_offset, header.signature_size, auth),
++        (header.public_key_offset, header.public_key_size, aux),
++        (header.public_key_metadata_offset, header.public_key_metadata_size, aux),
++        (header.descriptors_offset, header.descriptors_size, aux),
++    ):
++        if offset + size > bound:
++            raise ValueError("vbmeta field exceeds its block")
++    if not avbtool.verify_vbmeta_signature(header, data):
++        raise ValueError("vbmeta signature verification failed")
++
++
++def validate_metadata(text, algorithm):
++    fields = {}
++    for line in text.splitlines():
++        if not line or line.startswith("#"):
++            continue
++        key, separator, value = line.partition("=")
++        if separator and key.startswith("avb_"):
++            if key in fields:
++                raise ValueError("duplicate AVB metadata key")
++            fields[key] = value
++    if (fields.get("avb_prebuilt_vbmeta") != "true"
++            or fields.get("avb_enable") != "true"
++            or fields.get("avb_building_vbmeta_image") != "true"
++            or fields.get("avb_vbmeta_algorithm") != algorithm):
++        raise ValueError("target_files does not describe the pinned AVB image")
++    if "avb_vbmeta_key_path" in fields or "avb_vbmeta_args" in fields:
++        raise ValueError("target_files incorrectly describes a locally signed top-level image")
++
++
++def verify(args):
++    if args.reference.samefile(args.witness):
++        raise ValueError("reference must be an independent copy of the immutable official witness")
++    reference = args.reference.read_bytes()
++    if reference != args.witness.read_bytes():
++        raise ValueError("reference differs from the immutable official witness")
++    validate_reference(reference, args.algorithm, args.partition_size)
++    if args.image and args.image.read_bytes() != reference:
++        raise ValueError("installed vbmeta differs from the pinned reference")
++    if args.target_files:
++        validate_metadata((args.target_files / "META/misc_info.txt").read_text(), args.algorithm)
++        actual = (args.target_files / "IMAGES/vbmeta.img").read_bytes()
++        if actual != reference:
++            raise ValueError("target_files vbmeta differs from the pinned reference")
++    if args.target_files_zip:
++        with zipfile.ZipFile(args.target_files_zip) as archive:
++            metadata = [i for i in archive.infolist() if i.filename == "META/misc_info.txt"]
++            if len(metadata) != 1 or metadata[0].file_size > 1024 * 1024:
++                raise ValueError("missing, duplicate or oversized target_files metadata")
++            validate_metadata(archive.read(metadata[0]).decode("utf-8"), args.algorithm)
++            entries = [i for i in archive.infolist() if i.filename == "IMAGES/vbmeta.img"]
++            if len(entries) != 1 or entries[0].file_size != len(reference):
++                raise ValueError("target_files ZIP has missing, duplicate or invalid vbmeta")
++            if archive.read(entries[0]) != reference:
++                raise ValueError("target_files ZIP vbmeta differs from the pinned reference")
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--reference", type=Path, required=True)
++    parser.add_argument("--witness", type=Path, required=True)
++    parser.add_argument("--algorithm", required=True)
++    parser.add_argument("--partition-size", type=int, required=True)
++    parser.add_argument("--image", type=Path)
++    parser.add_argument("--target-files", type=Path)
++    parser.add_argument("--target-files-zip", type=Path)
++    args = parser.parse_args()
++    try:
++        verify(args)
++    except (OSError, ValueError, struct.error, zipfile.BadZipFile, avbtool.AvbError) as error:
++        parser.exit(1, f"Pinned vbmeta verification failed: {error}\n")
++    print("Pinned vbmeta signature and requested full-byte copies verified; image chain not checked.")
++
++
++if __name__ == "__main__":
++    main()

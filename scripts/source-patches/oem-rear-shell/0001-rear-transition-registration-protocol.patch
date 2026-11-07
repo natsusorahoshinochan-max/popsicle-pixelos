@@ -1,0 +1,96 @@
+diff --git a/packages/SystemUI/src/com/android/systemui/recents/OemRearShellTransitions.java b/packages/SystemUI/src/com/android/systemui/recents/OemRearShellTransitions.java
+new file mode 100644
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/recents/OemRearShellTransitions.java
+@@ -0,0 +1,91 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.recents;
++
++import android.os.Binder;
++import android.os.IBinder;
++import android.os.Parcel;
++import android.os.RemoteException;
++import android.window.RemoteTransition;
++import android.window.TransitionFilter;
++
++import java.util.Objects;
++
++/**
++ * Translates the official rear launcher's Shell registration protocol.
++ *
++ * The owner must supply the bound application's user-specific UID and the current Shell binder.
++ * This does not create or invalidate Shell interfaces. The Shell implementation retains its task
++ * permission checks; forwarding deliberately does not clear the incoming Binder identity.
++ */
++public final class OemRearShellTransitions extends Binder {
++    private static final String DESCRIPTOR = "com.android.wm.shell.shared.IShellTransitions";
++    private static final int REGISTER_REMOTE = 2;
++    private static final int UNREGISTER_REMOTE = 3;
++    private static final int GET_APPLY_TOKEN = 4;
++    private static final int GET_HOME_OVERLAY = 6;
++    private static final int REGISTER_TAKEOVER = 7;
++
++    private final IBinder mDelegate;
++    private final int mCallerUid;
++
++    public OemRearShellTransitions(IBinder delegate, int callerUid) {
++        mDelegate = Objects.requireNonNull(delegate);
++        mCallerUid = callerUid;
++        // Do not expose a local interface with the platform's different Java method signatures.
++        attachInterface(null, DESCRIPTOR);
++    }
++
++    @Override
++    protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
++            throws RemoteException {
++        if (code == INTERFACE_TRANSACTION) {
++            reply.writeString(DESCRIPTOR);
++            return true;
++        }
++        switch (code) {
++            case REGISTER_REMOTE:
++            case REGISTER_TAKEOVER:
++            case UNREGISTER_REMOTE:
++            case GET_APPLY_TOKEN:
++            case GET_HOME_OVERLAY:
++                if (Binder.getCallingUid() != mCallerUid) {
++                    throw new SecurityException("Caller is not the bound rear launcher");
++                }
++                break;
++            default:
++                return super.onTransact(code, data, reply, flags);
++        }
++        if (code != REGISTER_REMOTE && code != REGISTER_TAKEOVER) {
++            // These three transactions retain their original IDs and Parcel layouts.
++            return mDelegate.transact(code, data, reply, flags);
++        }
++        data.enforceInterface(DESCRIPTOR);
++        TransitionFilter filter = data.readTypedObject(TransitionFilter.CREATOR);
++        RemoteTransition remote = data.readTypedObject(RemoteTransition.CREATOR);
++        data.enforceNoDataAvail();
++        Objects.requireNonNull(remote, "remoteTransition").setFilter(filter);
++        Parcel translated = Parcel.obtain(mDelegate);
++        try {
++            translated.writeInterfaceToken(DESCRIPTOR);
++            translated.writeTypedObject(remote, 0);
++            return mDelegate.transact(code, translated, reply, flags);
++        } finally {
++            translated.recycle();
++        }
++    }
++}

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Match the main display only; the independent rear display is narrower. -->
+    <bool name="config_use_split_notification_shade">true</bool>
+</resources>

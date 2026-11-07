@@ -1,0 +1,10 @@
+--- a/Android.bp
++++ b/Android.bp
+@@ -562,6 +562,7 @@
+     stem: "framework",
+     apex_available: ["//apex_available:platform"],
+     visibility: [
++        "//frameworks/base/tools/popsicle-turbo",
+         "//frameworks/base",
+         "//frameworks/base/location",
+         // TODO(b/147128803) remove the below lines

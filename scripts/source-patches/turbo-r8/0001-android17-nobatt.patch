@@ -1,0 +1,273 @@
+--- a/TurboAdapter_NoBatt/Android.bp
++++ b/TurboAdapter_NoBatt/Android.bp
+@@ -1,7 +1,7 @@
+ java_import  {
+     name: "TurboAdapter-lib",
+     sdk_version: "current",
+-    jars: ["libs/TurboAdapter-lib.jar"],
++    jars: [":popsicle-turboadapter-a17-jar"],
+ }
+ 
+ android_library {
+@@ -23,8 +23,8 @@
+         "TurboAdapter-core",
+     ],
+     srcs: [
+-        "src/**/*.aidl",
+-        "src/**/*.java",
++        // The Android 17 input owns the real Binder and vendor interfaces.
++        "src/com/google/android/turboadapter/GoogleBatteryService.java",
+     ],
+     defaults: ["platform_app_defaults"],
+     platform_apis: true,
+--- a/TurboAdapter_NoBatt/AndroidManifest.xml
++++ b/TurboAdapter_NoBatt/AndroidManifest.xml
+@@ -1,15 +1,15 @@
+ <?xml version="1.0" encoding="utf-8" standalone="no"?>
+ <manifest
+     xmlns:android="http://schemas.android.com/apk/res/android"
+-    android:versionCode="34"
+-    android:versionName="14"
+-    android:compileSdkVersion="34"
+-    android:compileSdkVersionCodename="14"
++    android:versionCode="37"
++    android:versionName="17"
++    android:compileSdkVersion="37"
++    android:compileSdkVersionCodename="17"
+     package="com.google.android.turboadapter"
+-    platformBuildVersionCode="34"
+-    platformBuildVersionName="14">
++    platformBuildVersionCode="37"
++    platformBuildVersionName="17">
+ 
+-    <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="34"/>
++    <uses-sdk android:minSdkVersion="37" android:targetSdkVersion="37"/>
+     <uses-permission android:name="android.permission.DUMP"/>
+     <uses-permission android:name="android.permission.READ_DEVICE_CONFIG"/>
+     <uses-permission android:name="android.permission.BATTERY_STATS"/>
+--- a/TurboAdapter_NoBatt/src/com/google/android/turboadapter/GoogleBatteryService.java
++++ b/TurboAdapter_NoBatt/src/com/google/android/turboadapter/GoogleBatteryService.java
+@@ -1,35 +1,35 @@
++// SPDX-License-Identifier: Apache-2.0
+ package com.google.android.turboadapter;
+ 
+ import android.app.Service;
+-import android.content.Context;
+ import android.content.Intent;
+ import android.os.BatteryManager;
++import android.os.Binder;
+ import android.os.Bundle;
+ import android.os.IBinder;
+ import android.os.ResultReceiver;
+-import android.os.ServiceSpecificException;
+ import android.util.Log;
+ 
+-import java.util.concurrent.Executors;
+-import java.util.concurrent.ExecutorService;
++import java.util.List;
+ 
++/** Android 17 wire protocol with the device's existing NoBatt capability contract. */
+ public class GoogleBatteryService extends Service {
+-    private static final boolean DEBUG = false;
+-    private static final String TAG = GoogleBatteryService.class.getName();
++    private static final String TAG = "GoogleBatteryService";
++    private IBinder mBinder;
+ 
+-    private GoogleBatteryProxyDummy mBinder;
+-    ExecutorService mSingleThreadExecutor = Executors.newSingleThreadExecutor();
++    private boolean allowed() {
++        return TurboAdapterAccessChecker.isCallerAllowed(
++                getApplicationContext(), Binder.getCallingUid());
++    }
+ 
+-    IBinder bindToGoogleBatteryProxyDummy() {
+-        if (mBinder == null) {
+-            mBinder = new GoogleBatteryProxyDummy(this);
+-        }
+-        return mBinder;
++    private void unavailable() {
++        Log.w(TAG, "Google battery HAL is not provided by this device");
+     }
+ 
+     @Override
+     public IBinder onBind(Intent intent) {
+-        return bindToGoogleBatteryProxyDummy();
++        if (mBinder == null) mBinder = new GoogleBatteryProxy();
++        return mBinder;
+     }
+ 
+     @Override
+@@ -38,128 +38,78 @@
+         return false;
+     }
+ 
+-    @Override
+-    public void onDestroy() {
+-        super.onDestroy();
+-    }
+-
+-    public void runOnBackgroundThread(Runnable runnable) {
+-        mSingleThreadExecutor.execute(runnable);
+-    }
+-
+-    public class GoogleBatteryProxyDummy extends IGoogleBatteryService.Stub {
+-        final GoogleBatteryService mGoogleBatteryService;
+-
+-        GoogleBatteryProxyDummy(GoogleBatteryService googleBatteryService) {
+-            mGoogleBatteryService = googleBatteryService;
+-        }
+-
++    // The Stub comes from the same Android 17 APK as the other services, so its
++    // transaction IDs and Parcel encodings cannot drift from that protocol.
++    private final class GoogleBatteryProxy extends IGoogleBatteryService$Stub {
+         @Override
+         public String getVersion() {
+-            dlog("getVersion");
+-            return "4";
++            // Transport version, not a declaration of Google charging HAL support.
++            return "7";
+         }
+ 
+         @Override
+         public boolean isAdaptiveChargingEnabled() {
+-            dlog("isAdaptiveChargingEnabled");
++            allowed();
+             return false;
+         }
+ 
+         @Override
+-        public boolean setChargingDeadline(int i) {
+-            dlog("setChargingDeadline: i=" + i);
++        public boolean setChargingDeadline(int seconds) {
++            if (allowed()) unavailable();
+             return false;
+         }
+ 
+         @Override
+-        public void getChargingStageAndDeadline(ResultReceiver resultReceiver) {
+-            dlog("getChargingStageAndDeadline");
+-            runOnBackgroundThread(new GetChargingStageAndDeadlineRunnable(resultReceiver));
+-        }
+-
+-        @Override
+-        public boolean setProperty(int i, int i2, int i3) {
+-            dlog("setProperty: i=" + i + ", i2=" + i2 + ", i3=" + i3);
++        public boolean setProperty(int feature, int property, int value) {
++            if (allowed()) unavailable();
+             return false;
+         }
+ 
+         @Override
+-        public void getProperty(int i, int i2, ResultReceiver resultReceiver) {
+-            dlog("getProperty: i=" + i + ", i2=" + i2);
+-            runOnBackgroundThread(new GetBatteryPropertyRunnable(i, i2, resultReceiver));
+-        }
+-
+-        @Override
+-        public boolean setStringProperty(int i, int i2, String str) {
+-            dlog("setStringProperty: i=" + i + ", i2=" + i2 + ", str=" + str);
++        public boolean setStringProperty(int feature, int property, String value) {
++            if (allowed()) unavailable();
+             return false;
+         }
+ 
+         @Override
+-        public String getStringProperty(int i, int i2) {
+-            dlog("getStringProperty: i=" + i + ", i2=" + i2);
+-            return null; // TODO: Correctly report dummy value
+-        }
+-    }
+-
+-    final class GetBatteryPropertyRunnable implements Runnable {
+-        final int mFeature;
+-        final int mProperty;
+-        final ResultReceiver mResultReceiver;
+-
+-        GetBatteryPropertyRunnable(int i, int i2, ResultReceiver resultReceiver) {
+-            mFeature = i;
+-            mProperty = i2;
+-            mResultReceiver = resultReceiver;
++        public String getStringProperty(int feature, int property) {
++            if (allowed()) unavailable();
++            // Matches the Android 17 service's unavailable-HAL result.
++            return null;
+         }
+ 
+         @Override
+-        public void run() {
++        public List getRelaxationData(long since) {
++            if (allowed()) unavailable();
++            // Upstream returns null (not an empty successful sample) without HAL.
++            return null;
++        }
++
++        @Override
++        public void getProperty(int feature, int property, ResultReceiver receiver) {
++            if (allowed()) unavailable();
++            // Upstream does not send a successful callback when the HAL is absent.
++            // In particular, do not manufacture feature_property=0 as the old adapter did.
++        }
++
++        @Override
++        public void getChargingStageAndDeadline(ResultReceiver receiver) {
++            if (!allowed() || receiver == null) return;
++            long identity = Binder.clearCallingIdentity();
+             try {
+-                Bundle bundle = new Bundle();
+-                bundle.putInt("feature_property", 0);
+-                mResultReceiver.send(0, bundle);
+-            } catch (ServiceSpecificException | IllegalArgumentException e) {
+-                Log.e("GoogleBatteryService", "getProperty failed", e);
++                BatteryManager battery = getSystemService(BatteryManager.class);
++                if (battery == null) {
++                    Log.e(TAG, "BatteryManager unavailable");
++                    return;
++                }
++                Bundle result = new Bundle();
++                result.putString("charging_stage", battery.isCharging() ? "Enabled" : "Disabled");
++                // Existing NoBatt protocol value: no programmable deadline.
++                result.putInt("deadline_seconds", -3);
++                receiver.send(0, result);
++            } finally {
++                Binder.restoreCallingIdentity(identity);
+             }
+         }
+     }
+-
+-    final class GetChargingStageAndDeadlineRunnable implements Runnable {
+-        final ResultReceiver mResultReceiver;
+-
+-        GetChargingStageAndDeadlineRunnable(ResultReceiver resultReceiver) {
+-            mResultReceiver = resultReceiver;
+-        }
+-
+-        @Override
+-        public void run() {
+-            try {
+-                Bundle bundle = new Bundle();
+-                String charing = "Disabled";
+-                if (isCharging()) {
+-                    charing = "Enabled";
+-                }
+-                bundle.putString("charging_stage", charing); // Inactive, Active, Enabled, ...
+-                bundle.putInt("deadline_seconds", -3);
+-                mResultReceiver.send(0, bundle);
+-            } catch (ServiceSpecificException | IllegalArgumentException e) {
+-                Log.e("GoogleBatteryService", "getChargingStageAndDeadline failed", e);
+-            }
+-        }
+-    }
+-
+-    private boolean isCharging() {
+-        BatteryManager batteryManager =
+-                (BatteryManager) this.getSystemService(Context.BATTERY_SERVICE);
+-        if (batteryManager != null) {
+-            return batteryManager.isCharging();
+-        }
+-        return false;
+-    }
+-
+-    public static void dlog(String msg) {
+-        if (DEBUG) Log.d(TAG, msg);
+-    }
+ }

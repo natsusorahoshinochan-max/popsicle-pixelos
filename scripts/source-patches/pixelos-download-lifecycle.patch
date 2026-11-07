@@ -1,0 +1,1101 @@
+diff --git a/src/com/android/providers/downloads/DownloadInfo.java b/src/com/android/providers/downloads/DownloadInfo.java
+index a414bd8..3ab8bc5 100644
+--- a/src/com/android/providers/downloads/DownloadInfo.java
++++ b/src/com/android/providers/downloads/DownloadInfo.java
+@@ -329,13 +329,14 @@ public class DownloadInfo {
+      * Returns whether this download is ready to be scheduled.
+      */
+     public boolean isReadyToSchedule() {
+-        if (mControl == Downloads.Impl.CONTROL_PAUSED) {
++        if (mDeleted || mControl == Downloads.Impl.CONTROL_PAUSED) {
+             // the download is paused, so it's not going to start
+             return false;
+         }
+         switch (mStatus) {
+             case 0:
+             case Downloads.Impl.STATUS_PENDING:
++            case Downloads.Impl.STATUS_PAUSED_BY_APP:
+             case Downloads.Impl.STATUS_RUNNING:
+             case Downloads.Impl.STATUS_WAITING_FOR_NETWORK:
+             case Downloads.Impl.STATUS_WAITING_TO_RETRY:
+diff --git a/src/com/android/providers/downloads/DownloadJobService.java b/src/com/android/providers/downloads/DownloadJobService.java
+index 961b3be..c77c11b 100644
+--- a/src/com/android/providers/downloads/DownloadJobService.java
++++ b/src/com/android/providers/downloads/DownloadJobService.java
+@@ -22,14 +22,16 @@ import static com.android.providers.downloads.Constants.TAG;
+ 
+ import android.app.job.JobParameters;
+ import android.app.job.JobService;
+-import android.content.ContentValues;
+ import android.database.ContentObserver;
+-import android.provider.Downloads;
+ import android.util.Log;
+-import android.util.SparseArray;
+ 
+ import com.android.providers.downloads.flags.Flags;
+ 
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Objects;
++import java.util.concurrent.ConcurrentHashMap;
++
+ /**
+  * Service that hosts download jobs. Each active download job is handled as a
+  * unique {@link DownloadThread} instance.
+@@ -39,8 +41,71 @@ import com.android.providers.downloads.flags.Flags;
+  * we just reschedule the job and resume again in the future.
+  */
+ public class DownloadJobService extends JobService {
+-    // @GuardedBy("mActiveThreads")
+-    private SparseArray<DownloadThread> mActiveThreads = new SparseArray<>();
++    // Only registry bookkeeping holds this monitor; no database or scheduler call does.
++    private static final HashMap<Integer, IdLock> sLocks = new HashMap<>();
++    // Each ID is guarded by its retained IdLock, including retirement's cancel/replace.
++    // Concurrent maps allow unrelated IDs to progress without sharing an ownership lock.
++    private static final ConcurrentHashMap<Integer, Execution> sActive = new ConcurrentHashMap<>();
++    private static final ConcurrentHashMap<Integer, PendingJob> sPending = new ConcurrentHashMap<>();
++    private volatile boolean mDestroyed;
++
++    private static final class IdLock implements AutoCloseable {
++        final int id;
++        int references; // Guarded by sLocks, including callers waiting to enter this monitor.
++
++        IdLock(int id) {
++            this.id = id;
++        }
++
++        @Override
++        public void close() {
++            synchronized (sLocks) {
++                if (--references == 0) sLocks.remove(id);
++            }
++        }
++    }
++
++    private static IdLock retainLock(int id) {
++        synchronized (sLocks) {
++            final IdLock lock = sLocks.computeIfAbsent(id, IdLock::new);
++            lock.references++;
++            return lock;
++        }
++    }
++
++    private static final class Execution {
++        final DownloadJobService service;
++        final JobParameters params;
++        final DownloadThread thread;
++        volatile boolean stopped;
++
++        Execution(DownloadJobService service, JobParameters params, DownloadThread thread) {
++            this.service = service;
++            this.params = params;
++            this.thread = thread;
++        }
++    }
++
++    private static final class PendingJob {
++        final DownloadJobService service;
++        final JobParameters params;
++        volatile boolean stopped;
++
++        PendingJob(DownloadJobService service, JobParameters params) {
++            this.service = service;
++            this.params = params;
++        }
++    }
++
++    private static boolean sameExecution(JobParameters first, JobParameters second) {
++        if (first == second) return true;
++        // onStart/onStop parameters are separately parceled. JobScheduler creates a fresh
++        // callback binder for each execution; jobId alone cannot distinguish a replacement.
++        return first != null && second != null && first.getJobId() == second.getJobId()
++                && Objects.equals(first.getJobNamespace(), second.getJobNamespace())
++                && first.getCallback() != null && second.getCallback() != null
++                && first.getCallback().asBinder().equals(second.getCallback().asBinder());
++    }
+ 
+     @Override
+     public void onCreate() {
+@@ -54,85 +119,321 @@ public class DownloadJobService extends JobService {
+     @Override
+     public void onDestroy() {
+         super.onDestroy();
+-        getContentResolver().unregisterContentObserver(mObserver);
++        try {
++            getContentResolver().unregisterContentObserver(mObserver);
++        } finally {
++            mDestroyed = true;
++            final HashSet<Integer> ids = new HashSet<>(sActive.keySet());
++            ids.addAll(sPending.keySet());
++            for (int id : ids) {
++                try (IdLock lock = retainLock(id)) {
++                    synchronized (lock) {
++                        final PendingJob pending = sPending.get(id);
++                        if (pending != null && pending.service == this) {
++                            pending.stopped = true;
++                            sPending.remove(id);
++                        }
++                        final Execution active = sActive.get(id);
++                        if (active != null && active.service == this) {
++                            active.stopped = true;
++                            active.thread.requestShutdown();
++                        }
++                    }
++                }
++            }
++        }
+     }
+ 
+     @Override
+     public boolean onStartJob(JobParameters params) {
+         final int id = params.getJobId();
++        final Execution execution;
++        final PendingJob pending;
++        final PendingJob superseded;
++        try {
++            try (IdLock lock = retainLock(params.getJobId())) {
++                synchronized (lock) {
++                    if (mDestroyed) return false;
++                    final DownloadInfo info = queryDownloadInfo(id);
++                    if (info == null || !info.isReadyToSchedule()) return false;
++                    final Execution active = sActive.get(id);
++                    if (active != null) {
++                        if (sameExecution(active.params, params)) return true;
++                        superseded = sPending.get(id);
++                        pending = new PendingJob(this, params);
++                        sPending.put(id, pending);
++                        active.thread.requestShutdownForReplacement();
++                        execution = null;
++                    } else {
++                        superseded = null;
++                        pending = null;
++                        execution = prepareExecutionLocked(params, info);
++                        if (execution == null) return false;
++                    }
++                }
++            }
++        } catch (RuntimeException e) {
++            Log.e(TAG, "Unable to prepare download job " + id, e);
++            completeCallback(params, false, true);
++            return true;
++        }
++        if (superseded != null && !sameExecution(superseded.params, params)) {
++            superseded.service.completeCallback(superseded.params, superseded.stopped, false);
++        }
++        if (execution != null) {
++            startExecution(execution);
++        } else {
++            try {
++                showJobNotification(params);
++            } catch (RuntimeException e) {
++                Log.e(TAG, "Unable to notify queued download job " + id, e);
++                try (IdLock lock = retainLock(params.getJobId())) {
++                    synchronized (lock) {
++                        if (sPending.get(id) == pending) sPending.remove(id);
++                    }
++                }
++                completeCallback(params, pending.stopped, true);
++            }
++        }
++        return true;
++    }
+ 
+-        // Spin up thread to handle this download
+-        final DownloadInfo info = DownloadInfo.queryDownloadInfo(this, id);
+-        if (info == null) {
+-            Log.w(TAG, "Odd, no details found for download " + id);
+-            return false;
++    private Execution prepareExecutionLocked(JobParameters params, DownloadInfo info) {
++        final DownloadThread thread = createDownloadThread(params, info);
++        final Execution execution = new Execution(this, params, thread);
++        sActive.put(params.getJobId(), execution);
++        try {
++            if (!thread.prepareToStart()) {
++                sActive.remove(params.getJobId());
++                return null;
++            }
++            return execution;
++        } catch (RuntimeException | Error e) {
++            try {
++                thread.abortBeforeStart();
++            } catch (RuntimeException | Error cleanup) {
++                e.addSuppressed(cleanup);
++            } finally {
++                sActive.remove(params.getJobId());
++            }
++            throw e;
+         }
++    }
+ 
+-        if (Flags.ensureUijNotification() && params.isUserInitiatedJob()) {
+-            // For User-Initiated Jobs, we must satisfy the "visual contract" immediately.
+-            // We update the status to RUNNING now so the Notifier identifies this download
+-            // as active during the immediate update() call below.
+-            final ContentValues values = new ContentValues();
+-            values.put(Downloads.Impl.COLUMN_STATUS, Downloads.Impl.STATUS_RUNNING);
+-            getContentResolver().update(info.getAllDownloadsUri(), values, null, null);
+-
+-            // This call performs the mandatory setNotification() handshake with JobScheduler.
+-            Helpers.getDownloadNotifier(this).update(this, params);
++    private void startExecution(Execution execution) {
++        boolean startAttempted = false;
++        boolean startReturned = false;
++        try {
++            execution.service.showJobNotification(execution.params);
++            try (IdLock lock = retainLock(execution.params.getJobId())) {
++                synchronized (lock) {
++                    if (sActive.get(execution.params.getJobId()) != execution) return;
++                    if (execution.service.mDestroyed) execution.stopped = true;
++                    if (!execution.stopped) {
++                        // Serialize start with onStop and retirement. A worker may run immediately,
++                        // but cannot relinquish this record until start has returned.
++                        startAttempted = true;
++                        execution.thread.start();
++                        startReturned = true;
++                    }
++                }
++            }
++        } catch (RuntimeException e) {
++            Log.e(TAG, "Unable to start download job " + execution.params.getJobId(), e);
++        } finally {
++            // Thread.start can fail with Error as well (notably native thread allocation).
++            // Release a provably unstarted execution, but preserve the original fatal error.
++            if (!startReturned) retireUnstartedExecution(execution, startAttempted);
+         }
++    }
+ 
+-        final DownloadThread thread;
+-        synchronized (mActiveThreads) {
+-            if (mActiveThreads.indexOfKey(id) >= 0) {
+-                Log.w(TAG, "Odd, already running download " + id);
+-                return false;
++    private void retireUnstartedExecution(Execution execution, boolean startAttempted) {
++        boolean retire = false;
++        try {
++            try (IdLock lock = retainLock(execution.params.getJobId())) {
++                synchronized (lock) {
++                    if (sActive.get(execution.params.getJobId()) != execution) return;
++                    if (startAttempted && (execution.thread.isAlive()
++                            || execution.thread.getState() != Thread.State.NEW)) {
++                        // ART can report NEW while nativePeer already exists (kStarting). A start
++                        // override can also fail after super.start. Neither permits early handoff.
++                        execution.thread.requestShutdown();
++                        return;
++                    }
++                    retire = true;
++                    try {
++                        // No worker was started. Restore only its unchanged RUNNING claim, never a
++                        // concurrent pause/delete/terminal state or any progress/failure metadata.
++                        execution.thread.abortBeforeStart();
++                    } catch (RuntimeException e) {
++                        Log.e(TAG, "Unable to restore unstarted download claim", e);
++                    }
++                }
+             }
+-            thread = new DownloadThread(this, params, info);
+-            mActiveThreads.put(id, thread);
++        } finally {
++            if (retire) retireExecution(execution.params, execution.thread, true, true);
+         }
+-        thread.start();
++    }
+ 
+-        return true;
++    DownloadThread createDownloadThread(JobParameters params, DownloadInfo info) {
++        return new DownloadThread(this, params, info);
++    }
++
++    DownloadInfo queryDownloadInfo(long id) {
++        return DownloadInfo.queryDownloadInfo(this, id);
++    }
++
++    void showJobNotification(JobParameters params) {
++        if (Flags.ensureUijNotification() && params.isUserInitiatedJob()) {
++            // A replacement can wait for the old worker while its row remains PENDING.
++            // The notifier includes that truthful state; never overwrite it to fake RUNNING.
++            Helpers.getDownloadNotifier(this).update(this, params);
++        }
+     }
+ 
+     @Override
+     public boolean onStopJob(JobParameters params) {
+         final int id = params.getJobId();
+         Log.d(TAG, "onStopJob id=" + id + ", reason=" + params.getDebugStopReason());
+-
+-        final DownloadThread thread;
+-        synchronized (mActiveThreads) {
+-            thread = mActiveThreads.removeReturnOld(id);
+-        }
+-        if (thread != null) {
+-            // If the thread is still running, asynchronously request a
+-            // shutdown. The thread is responsible for rescheduling the
+-            // job based on its latest progress.
+-            thread.requestShutdown();
++        try (IdLock lock = retainLock(params.getJobId())) {
++            synchronized (lock) {
++                final PendingJob pending = sPending.get(id);
++                if (pending != null && sameExecution(pending.params, params)) {
++                    pending.stopped = true;
++                    sPending.remove(id);
++                }
++                final Execution active = sActive.get(id);
++                if (active != null && sameExecution(active.params, params)) {
++                    active.stopped = true;
++                    active.thread.requestShutdown();
++                }
++            }
+         }
+         return false;
+     }
+ 
+-    public void jobFinishedInternal(JobParameters params, boolean needsReschedule) {
+-        final int id = params.getJobId();
++    public void jobFinishedInternal(JobParameters params, DownloadThread thread,
++            boolean needsReschedule) {
++        retireExecution(params, thread, needsReschedule, false);
++    }
+ 
+-        synchronized (mActiveThreads) {
+-            mActiveThreads.remove(params.getJobId());
++    private void retireExecution(JobParameters params, DownloadThread thread,
++            boolean needsReschedule, boolean infrastructureFailure) {
++        final int id = params.getJobId();
++        final Execution finished;
++        final PendingJob pending;
++        Execution next = null;
++        boolean retryFinished = false;
++        boolean retryPending = false;
++        try (IdLock lock = retainLock(params.getJobId())) {
++            synchronized (lock) {
++                finished = sActive.get(id);
++                if (finished == null || finished.thread != thread
++                        || !sameExecution(finished.params, params)) {
++                    return;
++                }
++                // The worker has completed all file/DB work. Release its ownership before any
++                // fallible query, scheduler call, notification, or preparation of the next worker.
++                sActive.remove(id);
++                pending = sPending.remove(id);
++                if (pending != null) {
++                    try {
++                        final DownloadInfo info = pending.service.queryDownloadInfo(id);
++                        if (!pending.stopped && !pending.service.mDestroyed
++                                && info != null && info.isReadyToSchedule()) {
++                            next = pending.service.prepareExecutionLocked(pending.params, info);
++                        }
++                    } catch (RuntimeException e) {
++                        Log.e(TAG, "Unable to prepare replacement download job " + id, e);
++                        retryPending = true;
++                    }
++                } else if (needsReschedule) {
++                    try {
++                        final DownloadInfo info = queryDownloadInfo(id);
++                        if (info != null && info.isReadyToSchedule()) {
++                            if (infrastructureFailure) {
++                                retryFinished = true;
++                            } else {
++                                Helpers.scheduleJobAfterExecution(this, info);
++                            }
++                        }
++                    } catch (RuntimeException e) {
++                        Log.e(TAG, "Unable to reschedule retired download job " + id, e);
++                        retryFinished = true;
++                    }
++                }
++            }
++        }
++        // These callbacks must not hold the download ownership lock. Each failure is
++        // reported independently; the next owner must still receive its start/finish path.
++        finished.service.completeCallback(finished.params, finished.stopped, retryFinished);
++        try {
++            updateNotifications();
++        } catch (RuntimeException e) {
++            Log.e(TAG, "Unable to update notifications after download retirement", e);
+         }
+-        if (needsReschedule) {
+-            Helpers.scheduleJob(this, DownloadInfo.queryDownloadInfo(this, id));
++        if (next != null) {
++            next.service.startExecution(next);
++        } else if (pending != null) {
++            pending.service.completeCallback(pending.params, pending.stopped, retryPending);
+         }
++    }
+ 
+-        // Update notifications one last time while job is protecting us
+-        mObserver.onChange(false);
++    private void completeCallback(JobParameters params, boolean stopped, boolean retry) {
++        if (stopped) return;
++        if (retry) {
++            try (IdLock lock = retainLock(params.getJobId())) {
++                synchronized (lock) {
++                    final Execution active = sActive.get(params.getJobId());
++                    final PendingJob pending = sPending.get(params.getJobId());
++                    // Never re-register old work over a different execution already taking over.
++                    if ((active != null && !sameExecution(active.params, params))
++                            || (pending != null && !sameExecution(pending.params, params))) {
++                        retry = false;
++                    } else {
++                        try {
++                            final DownloadInfo info = queryDownloadInfo(params.getJobId());
++                            retry = info != null && info.isReadyToSchedule();
++                        } catch (RuntimeException e) {
++                            // The DB result is unknown, not success. Ask the scheduler to retry only
++                            // this still-current callback; onStart rechecks the real row next time.
++                            Log.e(TAG, "Unable to inspect failed download before retry", e);
++                        }
++                    }
++                }
++            }
++        }
++        try {
++            if (retry) {
++                retryJob(params);
++            } else {
++                finishJob(params);
++            }
++        } catch (RuntimeException e) {
++            // A dead/stale scheduler callback cannot retain a file owner or block another job.
++            // Keep the failure visible; no database status is rewritten as success.
++            Log.e(TAG, "Unable to acknowledge download job " + params.getJobId(), e);
++        }
++    }
+ 
+-        // We do our own rescheduling above
++    void finishJob(JobParameters params) {
++        // Finishing an execution says nothing about the row's download success status.
+         jobFinished(params, false);
+     }
+ 
++    void retryJob(JobParameters params) {
++        // JobScheduler validates this execution's callback and applies its normal backoff.
++        jobFinished(params, true);
++    }
++
++    void updateNotifications() {
++        Helpers.getDownloadNotifier(this).update();
++    }
++
+     private ContentObserver mObserver = new ContentObserver(Helpers.getAsyncHandler()) {
+         @Override
+         public void onChange(boolean selfChange) {
+-            Helpers.getDownloadNotifier(DownloadJobService.this).update();
++            updateNotifications();
+         }
+     };
+ }
+diff --git a/src/com/android/providers/downloads/DownloadNotifier.java b/src/com/android/providers/downloads/DownloadNotifier.java
+index 1e4dd0a..37170eb 100644
+--- a/src/com/android/providers/downloads/DownloadNotifier.java
++++ b/src/com/android/providers/downloads/DownloadNotifier.java
+@@ -21,6 +21,7 @@ import static android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMP
+ import static android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_ONLY_COMPLETION;
+ import static android.provider.Downloads.Impl.STATUS_QUEUED_FOR_WIFI;
+ import static android.provider.Downloads.Impl.STATUS_RUNNING;
++import static android.provider.Downloads.Impl.STATUS_PENDING;
+ 
+ import static com.android.providers.downloads.Constants.TAG;
+ 
+@@ -530,7 +531,7 @@ public class DownloadNotifier {
+     }
+ 
+     private static boolean isActiveAndVisible(int status, int visibility) {
+-        return status == STATUS_RUNNING &&
++        return (status == STATUS_PENDING || status == STATUS_RUNNING) &&
+                 (visibility == VISIBILITY_VISIBLE
+                 || visibility == VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+     }
+diff --git a/src/com/android/providers/downloads/DownloadProvider.java b/src/com/android/providers/downloads/DownloadProvider.java
+index f3f3bc3..de72912 100644
+--- a/src/com/android/providers/downloads/DownloadProvider.java
++++ b/src/com/android/providers/downloads/DownloadProvider.java
+@@ -88,6 +88,7 @@ import java.util.Arrays;
+ import java.util.Iterator;
+ import java.util.Map;
+ import java.util.Objects;
++import java.util.function.BooleanSupplier;
+ 
+ /**
+  * Allows application to interact with the download manager.
+@@ -1415,6 +1416,16 @@ public final class DownloadProvider extends ContentProvider {
+     @Override
+     public int update(final Uri uri, final ContentValues values,
+             final String where, final String[] whereArgs) {
++        final String manualControl = uri.getQueryParameter(
++                Downloads.Impl.QUERY_PARAMETER_MANUAL_CONTROL);
++        if (manualControl != null) {
++            return updateManualControl(uri, values, where, whereArgs, manualControl);
++        }
++        final boolean deferCompletion = uri.getBooleanQueryParameter(
++                QUERY_PARAMETER_DEFER_COMPLETION, false);
++        if (deferCompletion && Binder.getCallingPid() != Process.myPid()) {
++            throw new SecurityException("Only the download worker can defer completion");
++        }
+         final Context context = getContext();
+         final ContentResolver resolver = context.getContentResolver();
+ 
+@@ -1485,6 +1496,9 @@ public final class DownloadProvider extends ContentProvider {
+ 
+                 final SQLiteQueryBuilder qb = getQueryBuilder(uri, match);
+                 count = qb.update(db, filteredValues, where, whereArgs);
++                if (deferCompletion || count == 0) {
++                    break;
++                }
+                 final CallingIdentity token = clearCallingIdentity();
+                 try (Cursor cursor = qb.query(db, null, where, whereArgs, null, null, null);
+                         ContentProviderClient client = getContext().getContentResolver()
+@@ -1561,7 +1575,77 @@ public final class DownloadProvider extends ContentProvider {
+                 throw new UnsupportedOperationException("Cannot update URI: " + uri);
+         }
+ 
+-        notifyContentChanged(uri, match);
++        if (!deferCompletion && count != 0) {
++            notifyContentChanged(uri, match);
++        }
++        return count;
++    }
++
++    // Internal worker terminal-state claim. File finalization must precede completion notices.
++    static final String QUERY_PARAMETER_DEFER_COMPLETION = "defer_completion";
++    // Worker progress and final metadata are committed synchronously by DownloadThread.
++    static final String QUERY_PARAMETER_WORKER_WRITE = "worker_write";
++
++    /**
++     * Provider and worker share a process. Keep the terminal-state claim, file finalization,
++     * and resulting file metadata in one transaction so readers cannot observe success early.
++     * The operation uses the normal scoped UPDATE path with completion side effects deferred;
++     * notification, MediaStore and scheduling work must run only after this transaction ends.
++     */
++    boolean completeDownload(BooleanSupplier operation) {
++        final SQLiteDatabase db = mOpenHelper.getWritableDatabase();
++        db.beginTransaction();
++        try {
++            final boolean completed = operation.getAsBoolean();
++            db.setTransactionSuccessful();
++            return completed;
++        } finally {
++            db.endTransaction();
++        }
++    }
++
++    private int updateManualControl(Uri uri, ContentValues values, String where,
++            String[] whereArgs, String action) {
++        final int match = sURIMatcher.match(uri);
++        if ((match != MY_DOWNLOADS_ID && match != ALL_DOWNLOADS_ID)
++                || values.size() != 0 || where != null || whereArgs != null) {
++            throw new IllegalArgumentException("Manual control requires one download URI only");
++        }
++        final int status;
++        final String stateSelection;
++        if (Downloads.Impl.MANUAL_CONTROL_PAUSE.equals(action)) {
++            status = Downloads.Impl.STATUS_PAUSED_MANUAL;
++            stateSelection = Downloads.Impl.COLUMN_STATUS + " IN ("
++                    + Downloads.Impl.STATUS_PENDING + "," + Downloads.Impl.STATUS_RUNNING + ","
++                    + Downloads.Impl.STATUS_WAITING_TO_RETRY + ","
++                    + Downloads.Impl.STATUS_WAITING_FOR_NETWORK + ","
++                    + Downloads.Impl.STATUS_QUEUED_FOR_WIFI + ") AND ("
++                    + Downloads.Impl.COLUMN_CONTROL + " IS NULL OR "
++                    + Downloads.Impl.COLUMN_CONTROL + " != " + Downloads.Impl.CONTROL_PAUSED + ")";
++        } else if (Downloads.Impl.MANUAL_CONTROL_RESUME.equals(action)) {
++            status = Downloads.Impl.STATUS_PENDING;
++            stateSelection = Downloads.Impl.COLUMN_STATUS + "="
++                    + Downloads.Impl.STATUS_PAUSED_MANUAL;
++        } else {
++            throw new IllegalArgumentException("Unknown manual-control operation: " + action);
++        }
++        final ContentValues update = new ContentValues();
++        update.put(Downloads.Impl.COLUMN_STATUS, status);
++        update.put(Downloads.Impl.COLUMN_LAST_MODIFICATION, mSystemFacade.currentTimeMillis());
++        // getQueryBuilder preserves the caller's ID/UID scope; the ContentProvider transport
++        // still enforces the existing URI permissions. State is tested by the UPDATE itself.
++        final int count = getQueryBuilder(uri, match).update(mOpenHelper.getWritableDatabase(),
++                update, stateSelection + " AND " + Downloads.Impl.COLUMN_DELETED + "=0", null);
++        if (count != 0) {
++            final CallingIdentity token = clearCallingIdentity();
++            try {
++                // Query the updated ID, never the old status predicate, which no longer matches.
++                Helpers.scheduleJob(getContext(), Long.parseLong(getDownloadIdFromUri(uri)));
++                notifyContentChanged(uri, match);
++            } finally {
++                restoreCallingIdentity(token);
++            }
++        }
+         return count;
+     }
+ 
+@@ -1741,6 +1825,11 @@ public final class DownloadProvider extends ContentProvider {
+      */
+     @Override
+     public ParcelFileDescriptor openFile(final Uri uri, String mode) throws FileNotFoundException {
++        final boolean workerWrite = uri.getBooleanQueryParameter(
++                QUERY_PARAMETER_WORKER_WRITE, false);
++        if (workerWrite && (Binder.getCallingPid() != Process.myPid() || !"rw".equals(mode))) {
++            throw new SecurityException("Worker file access requires a local read/write open");
++        }
+         if (Constants.LOGVV) {
+             logVerboseOpenFileInfo(uri, mode);
+         }
+@@ -1808,7 +1897,11 @@ public final class DownloadProvider extends ContentProvider {
+         }
+ 
+         final int pfdMode = ParcelFileDescriptor.parseMode(mode);
+-        if (pfdMode == ParcelFileDescriptor.MODE_READ_ONLY) {
++        if (pfdMode == ParcelFileDescriptor.MODE_READ_ONLY || workerWrite) {
++            // The worker already records its durable prefix and full HTTP content length.
++            // An asynchronous close callback would confuse partial file length with total
++            // length and could run after the next execution has taken over this download.
++            // Keep the existing URI, canonical path and allowed-directory checks above.
+             return ParcelFileDescriptor.open(file, pfdMode);
+         } else {
+             try {
+diff --git a/src/com/android/providers/downloads/DownloadThread.java b/src/com/android/providers/downloads/DownloadThread.java
+index 65056e6..e9430ec 100644
+--- a/src/com/android/providers/downloads/DownloadThread.java
++++ b/src/com/android/providers/downloads/DownloadThread.java
+@@ -29,6 +29,8 @@ import static android.provider.Downloads.Impl.STATUS_FILE_ERROR;
+ import static android.provider.Downloads.Impl.STATUS_HTTP_DATA_ERROR;
+ import static android.provider.Downloads.Impl.STATUS_INSUFFICIENT_SPACE_ERROR;
+ import static android.provider.Downloads.Impl.STATUS_PAUSED_BY_APP;
++import static android.provider.Downloads.Impl.STATUS_PAUSED_MANUAL;
++import static android.provider.Downloads.Impl.STATUS_PENDING;
+ import static android.provider.Downloads.Impl.STATUS_QUEUED_FOR_WIFI;
+ import static android.provider.Downloads.Impl.STATUS_RUNNING;
+ import static android.provider.Downloads.Impl.STATUS_SUCCESS;
+@@ -52,6 +54,7 @@ import static java.net.HttpURLConnection.HTTP_SEE_OTHER;
+ import static java.net.HttpURLConnection.HTTP_UNAVAILABLE;
+ 
+ import android.app.job.JobParameters;
++import android.content.ContentProviderClient;
+ import android.content.ContentValues;
+ import android.content.Context;
+ import android.content.Intent;
+@@ -158,13 +161,16 @@ public class DownloadThread extends Thread {
+ 
+         public String mErrorMsg;
+ 
+-        private static final String NOT_CANCELED = COLUMN_STATUS + " != '" + STATUS_CANCELED + "'";
+-        private static final String NOT_DELETED = COLUMN_DELETED + " == '0'";
++        private static final String NOT_DELETED = COLUMN_DELETED + "=0";
+         private static final String NOT_PAUSED = "(" + COLUMN_CONTROL + " IS NULL OR "
+-                + COLUMN_CONTROL + " != '" + CONTROL_PAUSED + "')";
+-
+-        private static final String SELECTION_VALID = NOT_CANCELED + " AND " + NOT_DELETED + " AND "
+-                + NOT_PAUSED;
++                + COLUMN_CONTROL + "!=" + CONTROL_PAUSED + ")";
++        private static final String SELECTION_RUNNING = COLUMN_STATUS + "=" + STATUS_RUNNING
++                + " AND " + NOT_DELETED + " AND " + NOT_PAUSED;
++        private static final String SELECTION_STARTABLE = COLUMN_STATUS + " IN (0,"
++                + STATUS_PENDING + "," + STATUS_RUNNING + "," + STATUS_PAUSED_BY_APP + ","
++                + STATUS_WAITING_TO_RETRY + "," + STATUS_WAITING_FOR_NETWORK + ","
++                + STATUS_QUEUED_FOR_WIFI + "," + Downloads.Impl.STATUS_DEVICE_NOT_FOUND_ERROR
++                + ") AND " + NOT_DELETED + " AND " + NOT_PAUSED;
+ 
+         public DownloadInfoDelta(DownloadInfo info) {
+             mUri = info.mUri;
+@@ -197,28 +203,75 @@ public class DownloadThread extends Thread {
+             return values;
+         }
+ 
+-        /**
+-         * Blindly push update of current delta values to provider.
+-         */
+-        public void writeToDatabase() {
+-            mContext.getContentResolver().update(mInfo.getAllDownloadsUri(), buildContentValues(),
+-                    null, null);
++        boolean prepareToStart() {
++            final ContentValues values = new ContentValues();
++            values.put(COLUMN_STATUS, STATUS_RUNNING);
++            values.put(Downloads.Impl.COLUMN_LAST_MODIFICATION, mSystemFacade.currentTimeMillis());
++            return mContext.getContentResolver().update(mInfo.getAllDownloadsUri(), values,
++                    SELECTION_STARTABLE, null) == 1;
+         }
+ 
+-        /**
+-         * Push update of current delta values to provider, asserting strongly
+-         * that we haven't been paused or deleted.
+-         */
++        void restoreUnstartedState() {
++            if (mInfo.mStatus == STATUS_RUNNING) return;
++            final ContentValues values = new ContentValues();
++            values.put(COLUMN_STATUS, mInfo.mStatus);
++            mContext.getContentResolver().update(mInfo.getAllDownloadsUri(), values,
++                    SELECTION_RUNNING, null);
++        }
++
++        /** Save progress only while this execution still owns the running state. */
+         public void writeToDatabaseOrThrow() throws StopRequestException {
+             if (mContext.getContentResolver().update(mInfo.getAllDownloadsUri(),
+-                    buildContentValues(), SELECTION_VALID, null) == 0) {
+-                if (mInfo.queryDownloadControl() == CONTROL_PAUSED) {
+-                    throw new StopRequestException(STATUS_PAUSED_BY_APP, "Download paused!");
+-                } else {
+-                    throw new StopRequestException(STATUS_CANCELED, "Download deleted or missing!");
+-                }
++                    buildContentValues(), SELECTION_RUNNING, null) == 0) {
++                throw stateChangedException();
+             }
+         }
++
++        /**
++         * Claim the final state before touching the file. A manual pause/resume wins by changing
++         * RUNNING atomically; it must not be overwritten or have its partial file deleted.
++         */
++        boolean claimFinalState() {
++            final Uri uri = mInfo.getAllDownloadsUri().buildUpon().appendQueryParameter(
++                    DownloadProvider.QUERY_PARAMETER_DEFER_COMPLETION, "true").build();
++            return mContext.getContentResolver().update(uri, buildContentValues(),
++                    SELECTION_RUNNING, null) == 1;
++        }
++
++        void commitFinalState() {
++            final Uri uri = mInfo.getAllDownloadsUri().buildUpon().appendQueryParameter(
++                    DownloadProvider.QUERY_PARAMETER_DEFER_COMPLETION, "true").build();
++            if (mContext.getContentResolver().update(uri, buildContentValues(),
++                    COLUMN_STATUS + "=" + mStatus + " AND " + NOT_DELETED, null) != 1) {
++                throw new IllegalStateException("Lost final state inside completion transaction");
++            }
++        }
++
++        void publishFinalState() {
++            // A concurrent explicit restart/delete can supersede a completed execution too.
++            mContext.getContentResolver().update(mInfo.getAllDownloadsUri(), buildContentValues(),
++                    COLUMN_STATUS + "=" + mStatus + " AND " + NOT_DELETED, null);
++        }
++
++        void preserveInterruptedProgress() {
++            final ContentValues values = buildContentValues();
++            values.remove(COLUMN_STATUS);
++            values.remove(Downloads.Impl.COLUMN_FAILED_CONNECTIONS);
++            values.remove(Constants.RETRY_AFTER_X_REDIRECT_COUNT);
++            values.remove(Downloads.Impl.COLUMN_ERROR_MSG);
++            values.put(Downloads.Impl.COLUMN_CURRENT_BYTES, mDurableBytes);
++            // No replacement worker can start until JobService retires this thread. Keep the
++            // latest durable prefix without changing a user's pause or already queued resume.
++            mContext.getContentResolver().update(mInfo.getAllDownloadsUri(), values,
++                    COLUMN_STATUS + " IN (" + STATUS_PAUSED_MANUAL + "," + STATUS_PENDING
++                            + ") AND " + NOT_DELETED, null);
++            // Retain the existing app-control pause semantics, with its own atomic predicate.
++            values.put(COLUMN_STATUS, STATUS_PAUSED_BY_APP);
++            mContext.getContentResolver().update(mInfo.getAllDownloadsUri(), values,
++                    COLUMN_STATUS + "=" + STATUS_RUNNING + " AND " + COLUMN_CONTROL + "="
++                            + CONTROL_PAUSED + " AND " + NOT_DELETED, null);
++        }
++
+     }
+ 
+     /**
+@@ -245,6 +298,9 @@ public class DownloadThread extends Thread {
+ 
+     /** Flag indicating that thread must be halted */
+     private volatile boolean mShutdownRequested;
++    private volatile boolean mReplacementRequested;
++    private boolean mStarted;
++    private long mDurableBytes;
+ 
+     /** This is initialized lazily in startDownload */
+     private HttpEngine mHttpEngine;
+@@ -263,6 +319,7 @@ public class DownloadThread extends Thread {
+         mInfo = info;
+ 
+         mInfoDelta = new DownloadInfoDelta(info);
++        mDurableBytes = info.mCurrentBytes;
+     }
+ 
+     private boolean isUsingHttpEngine() {
+@@ -271,23 +328,18 @@ public class DownloadThread extends Thread {
+ 
+     @Override
+     public void run() {
+-        Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
+-
+-        // Skip when download already marked as finished; this download was
+-        // probably started again while racing with UpdateThread.
+-        if (mInfo.queryDownloadStatus() == Downloads.Impl.STATUS_SUCCESS) {
+-            logDebug("Already finished; skipping");
+-            return;
+-        }
+-
++        boolean listenerRegistered = false;
+         try {
++            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
++            if (!prepareToStart()) {
++                logDebug("No longer runnable; skipping");
++                return;
++            }
+             // while performing download, register for rules updates
+             mNetworkPolicy.registerListener(mPolicyListener);
+-
++            listenerRegistered = true;
+             logDebug("Starting");
+-
+-            mInfoDelta.mStatus = STATUS_RUNNING;
+-            mInfoDelta.writeToDatabase();
++            throwIfShutdownRequested();
+ 
+             // If we're showing a foreground notification for the requesting
+             // app, the download isn't affected by the blocked status of the
+@@ -308,7 +360,11 @@ public class DownloadThread extends Thread {
+             TrafficStats.setThreadStatsTagDownload();
+             TrafficStats.setThreadStatsUid(mInfo.mUid);
+ 
+-            executeDownload();
++            // A pause can win immediately after the last byte was durably received. Resuming
++            // that complete prefix must not issue an invalid Range starting at content length.
++            if (!hasCompleteDestination()) {
++                executeDownload();
++            }
+ 
+             mInfoDelta.mStatus = STATUS_SUCCESS;
+             TrafficStats.incrementOperationCount(1);
+@@ -372,35 +428,126 @@ public class DownloadThread extends Thread {
+             logError("Failed: " + mInfoDelta.mErrorMsg, t);
+ 
+         } finally {
+-            logDebug("Finished with status " + Downloads.Impl.statusToString(mInfoDelta.mStatus));
+-
+-            mNotifier.notifyDownloadSpeed(mId, 0);
+-
+-            finalizeDestination();
++            try {
++                logDebug("Finished with status " + Downloads.Impl.statusToString(mInfoDelta.mStatus));
++                if (mStarted) {
++                    if (finalizeWithTransaction()) {
++                        mInfoDelta.publishFinalState();
++                    } else {
++                        mInfoDelta.preserveInterruptedProgress();
++                    }
++                }
++            } catch (RuntimeException e) {
++                // The actual row remains authoritative. A failed finalization is not download
++                // success; retirement will inspect it and retain normal retry/terminal behavior.
++                logError("Unable to finalize download", e);
++            } finally {
++                try {
++                    runCleanup("clear download speed", () -> mNotifier.notifyDownloadSpeed(mId, 0));
++                    runCleanup("clear traffic tag", TrafficStats::clearThreadStatsTag);
++                    runCleanup("clear traffic UID", TrafficStats::clearThreadStatsUid);
++                    if (listenerRegistered) {
++                        runCleanup("unregister network policy listener",
++                                () -> mNetworkPolicy.unregisterListener(mPolicyListener));
++                    }
++                } finally {
++                    // No fallible DB read may precede relinquishing the process-wide file owner.
++                    // JobService reads the latest row after removing this exact execution.
++                    mJobService.jobFinishedInternal(mParams, this, mStarted);
++                }
++            }
++        }
++    }
+ 
+-            mInfoDelta.writeToDatabase();
++    private void runCleanup(String operation, Runnable cleanup) {
++        try {
++            cleanup.run();
++        } catch (RuntimeException e) {
++            logError("Unable to " + operation, e);
++        }
++    }
+ 
+-            TrafficStats.clearThreadStatsTag();
+-            TrafficStats.clearThreadStatsUid();
++    /** Atomically acquire a runnable row; also used before the UIJ notification handshake. */
++    boolean prepareToStart() {
++        if (!mStarted && mInfo.isReadyToSchedule() && mInfoDelta.prepareToStart()) {
++            mStarted = true;
++            mInfoDelta.mStatus = STATUS_RUNNING;
++        }
++        return mStarted;
++    }
+ 
+-            mNetworkPolicy.unregisterListener(mPolicyListener);
++    /** Called only by JobService while this execution owns the row and has no running thread. */
++    void abortBeforeStart() {
++        try {
++            mInfoDelta.restoreUnstartedState();
++        } finally {
++            mStarted = false;
+         }
++    }
+ 
+-        boolean needsReschedule = false;
+-        if (mInfoDelta.mStatus == STATUS_WAITING_TO_RETRY
+-                || mInfoDelta.mStatus == STATUS_WAITING_FOR_NETWORK
+-                || mInfoDelta.mStatus == STATUS_QUEUED_FOR_WIFI) {
+-            logDebug("rescheduling the job id:" + mId);
+-            needsReschedule = true;
++    private boolean finalizeWithTransaction() {
++        try (ContentProviderClient client = mContext.getContentResolver()
++                .acquireContentProviderClient(mInfo.getAllDownloadsUri())) {
++            if (client == null
++                    || !(client.getLocalContentProvider() instanceof DownloadProvider)) {
++                throw new IllegalStateException("Download worker requires its local provider");
++            }
++            final DownloadProvider provider = (DownloadProvider) client.getLocalContentProvider();
++            return provider.completeDownload(() -> {
++                if (!mInfoDelta.claimFinalState()) return false;
++                finalizeDestination();
++                mInfoDelta.commitFinalState();
++                return true;
++            });
+         }
++    }
+ 
+-        mJobService.jobFinishedInternal(mParams, needsReschedule);
++    private Uri getWorkerWriteUri() {
++        return mInfo.getAllDownloadsUri().buildUpon().appendQueryParameter(
++                DownloadProvider.QUERY_PARAMETER_WORKER_WRITE, "true").build();
+     }
+ 
+     public void requestShutdown() {
+         mShutdownRequested = true;
+     }
+ 
++    void requestShutdownForReplacement() {
++        mReplacementRequested = true;
++        mShutdownRequested = true;
++    }
++
++    private StopRequestException stateChangedException() {
++        final DownloadInfo latest = DownloadInfo.queryDownloadInfo(mContext, mId);
++        final int status;
++        if (latest == null || latest.mDeleted) {
++            status = STATUS_CANCELED;
++        } else if (latest.mStatus == STATUS_PAUSED_MANUAL || latest.mStatus == STATUS_PENDING) {
++            status = latest.mStatus;
++        } else if (latest.mControl == CONTROL_PAUSED) {
++            status = STATUS_PAUSED_BY_APP;
++        } else if (latest.mStatus != STATUS_RUNNING) {
++            status = latest.mStatus;
++        } else if (mReplacementRequested) {
++            status = STATUS_PENDING;
++        } else {
++            status = STATUS_HTTP_DATA_ERROR;
++        }
++        return new StopRequestException(status, "Download state changed or job stopped");
++    }
++
++    private void throwIfShutdownRequested() throws StopRequestException {
++        if (mShutdownRequested) throw stateChangedException();
++    }
++
++    private boolean hasCompleteDestination() {
++        return mInfoDelta.mTotalBytes >= 0
++                && mInfoDelta.mCurrentBytes == mInfoDelta.mTotalBytes
++                && mInfoDelta.mFileName != null
++                && new File(mInfoDelta.mFileName).isFile()
++                && new File(mInfoDelta.mFileName).length() >= mInfoDelta.mCurrentBytes
++                && !DownloadDrmHelper.isDrmConvertNeeded(mInfoDelta.mMimeType);
++    }
++
+     /**
+      * Fully execute a single download request. Setup and send the request,
+      * handle the response, and transfer the data to the destination file.
+@@ -585,7 +732,7 @@ public class DownloadThread extends Thread {
+ 
+             try {
+                 outPfd = mContext.getContentResolver()
+-                        .openFileDescriptor(mInfo.getAllDownloadsUri(), "rw");
++                        .openFileDescriptor(getWorkerWriteUri(), "rw");
+                 outFd = outPfd.getFileDescriptor();
+ 
+                 if (DownloadDrmHelper.isDrmConvertNeeded(mInfoDelta.mMimeType)) {
+@@ -633,7 +780,10 @@ public class DownloadThread extends Thread {
+ 
+             try {
+                 if (out != null) out.flush();
+-                if (outFd != null) outFd.sync();
++                if (outFd != null) {
++                    outFd.sync();
++                    mDurableBytes = mInfoDelta.mCurrentBytes;
++                }
+             } catch (IOException e) {
+             } finally {
+                 IoUtils.closeQuietly(out);
+@@ -651,10 +801,7 @@ public class DownloadThread extends Thread {
+         while (true) {
+             if (mPolicyDirty) checkConnectivity();
+ 
+-            if (mShutdownRequested) {
+-                throw new StopRequestException(STATUS_HTTP_DATA_ERROR,
+-                        "Local halt requested; job probably timed out");
+-            }
++            throwIfShutdownRequested();
+ 
+             int len = -1;
+             try {
+@@ -692,12 +839,12 @@ public class DownloadThread extends Thread {
+      * Called just before the thread finishes, regardless of status, to take any
+      * necessary action on the downloaded file.
+      */
+-    private void finalizeDestination() {
++    void finalizeDestination() {
+         if (Downloads.Impl.isStatusError(mInfoDelta.mStatus)) {
+             // When error, free up any disk space
+             try {
+                 final ParcelFileDescriptor target = mContext.getContentResolver()
+-                        .openFileDescriptor(mInfo.getAllDownloadsUri(), "rw");
++                        .openFileDescriptor(getWorkerWriteUri(), "rw");
+                 try {
+                     Os.ftruncate(target.getFileDescriptor(), 0);
+                 } catch (ErrnoException ignored) {
+@@ -799,6 +946,7 @@ public class DownloadThread extends Thread {
+             // fsync() to ensure that current progress has been flushed to disk,
+             // so we can always resume based on latest database information.
+             outFd.sync();
++            mDurableBytes = mInfoDelta.mCurrentBytes;
+ 
+             mInfoDelta.writeToDatabaseOrThrow();
+ 
+diff --git a/src/com/android/providers/downloads/Helpers.java b/src/com/android/providers/downloads/Helpers.java
+index 75d63cd..7fe23b7 100644
+--- a/src/com/android/providers/downloads/Helpers.java
++++ b/src/com/android/providers/downloads/Helpers.java
+@@ -162,16 +162,26 @@ public class Helpers {
+      * its current state to define job constraints.
+      */
+     public static boolean scheduleJob(Context context, DownloadInfo info) {
++        return scheduleJob(context, info, false);
++    }
++
++    /** Called only after the previous worker has relinquished all file and database work. */
++    static boolean scheduleJobAfterExecution(Context context, DownloadInfo info) {
++        return scheduleJob(context, info, true);
++    }
++
++    private static boolean scheduleJob(Context context, DownloadInfo info, boolean executionEnded) {
+         if (info == null) return false;
+ 
+         final JobScheduler scheduler = context.getSystemService(JobScheduler.class);
+ 
+-        // Tear down any existing job for this download
+         final int jobId = (int) info.mId;
+-        scheduler.cancel(jobId);
+-
+-        // Skip scheduling if download is paused or finished
+-        if (!info.isReadyToSchedule()) return false;
++        // Pausing/deleting ends an existing execution. Eligible jobs need no unconditional
++        // cancel: replacing identical work can otherwise stop a healthy download thread.
++        if (!info.isReadyToSchedule()) {
++            scheduler.cancel(jobId);
++            return false;
++        }
+ 
+         final JobInfo.Builder builder = new JobInfo.Builder(jobId,
+                 new ComponentName(context, DownloadJobService.class));
+@@ -233,7 +243,16 @@ public class Helpers {
+             packageName = context.getPackageManager().getPackagesForUid(info.mUid)[0];
+         }
+ 
+-        scheduler.scheduleAsPackage(builder.build(), packageName, UserHandle.myUserId(), TAG);
++        final JobInfo job = builder.build();
++        if (executionEnded) {
++            // An equal pending JobInfo can still describe the execution that just ended.
++            // Retire that registration now, after its worker has closed all I/O, so a retry
++            // cannot be lost when the old callback is acknowledged with jobFinished(false).
++            scheduler.cancel(jobId);
++        }
++        if (executionEnded || !job.equals(scheduler.getPendingJob(jobId))) {
++            scheduler.scheduleAsPackage(job, packageName, UserHandle.myUserId(), TAG);
++        }
+         return true;
+     }
+ 

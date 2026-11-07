@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+external/perfetto ece66975738007dd0978b911d8a2077e49b8f31e perfetto-descriptors/empty-gzip-descriptor.patch

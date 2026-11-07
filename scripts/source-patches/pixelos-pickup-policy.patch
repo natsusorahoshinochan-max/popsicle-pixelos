@@ -1,0 +1,326 @@
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+index 89b2347..7e32dec 100644
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -664,6 +664,12 @@
+          The default is false. -->
+     <bool name="config_lidControlsSleep">false</bool>
+ 
++    <!-- Wake-up sensor consumed by lift-to-wake. Standard TYPE_WAKE_GESTURE by default.
++         A device may select its wake-up special-trigger pickup sensor (value 1 = pickup). -->
++    <integer name="config_wakeGestureSensorType">23</integer>
++    <!-- Gate pickup on the real lid state and current user's smart-cover setting. -->
++    <bool name="config_wakeGestureRespectsSmartCover">false</bool>
++
+     <!-- The device states (supplied by DeviceStateManager) that should be treated as open by the
+          device fold controller. Default is empty. -->
+     <integer-array name="config_openDeviceStates">
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+index dcb37b8..46b222f 100644
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -1907,6 +1907,8 @@
+   <java-symbol type="bool" name="config_decoupleStatusBarAndDisplayCutoutFromScreenSize" />
+   <java-symbol type="bool" name="config_lidControlsScreenLock" />
+   <java-symbol type="bool" name="config_lidControlsSleep" />
++  <java-symbol type="integer" name="config_wakeGestureSensorType" />
++  <java-symbol type="bool" name="config_wakeGestureRespectsSmartCover" />
+   <java-symbol type="bool" name="config_lockDayNightMode" />
+   <java-symbol type="bool" name="config_lockUiMode" />
+   <java-symbol type="bool" name="config_reverseDefaultRotation" />
+diff --git a/services/core/java/com/android/server/policy/PhoneWindowManager.java b/services/core/java/com/android/server/policy/PhoneWindowManager.java
+index caf3c58..43d61a0 100644
+--- a/services/core/java/com/android/server/policy/PhoneWindowManager.java
++++ b/services/core/java/com/android/server/policy/PhoneWindowManager.java
+@@ -582,6 +582,10 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+     int mUiMode;
+ 
+     boolean mWakeGestureEnabledSetting;
++    boolean mWakeGestureRespectsSmartCover;
++    boolean mSmartCoverEnabled = true;
++    boolean mWakeGestureUserSwitching;
++    private static final String SMART_COVER_MODE = "miui_smart_cover_mode";
+     MyWakeGestureListener mWakeGestureListener;
+ 
+     int mLidKeyboardAccessibility;
+@@ -888,6 +892,10 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+             resolver.registerContentObserver(Settings.Secure.getUriFor(
+                     Settings.Secure.WAKE_GESTURE_ENABLED), false, this,
+                     UserHandle.USER_ALL);
++            if (mWakeGestureRespectsSmartCover) {
++                resolver.registerContentObserver(Settings.System.getUriFor(SMART_COVER_MODE),
++                        false, this, UserHandle.USER_ALL);
++            }
+             resolver.registerContentObserver(Settings.System.getUriFor(
+                     Settings.System.SCREEN_OFF_TIMEOUT), false, this,
+                     UserHandle.USER_ALL);
+@@ -977,9 +985,9 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+         }
+ 
+         @Override
+-        public void onWakeUp() {
++        public void onWakeUp(long generation) {
+             synchronized (mLock) {
+-                if (shouldEnableWakeGestureLp()) {
++                if (isCurrentGeneration(generation) && shouldEnableWakeGestureLp()) {
+                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY, "Wake Up");
+                     mWindowWakeUpPolicy.wakeUpFromWakeGesture();
+                 }
+@@ -2442,6 +2450,8 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+         mSwipeToScreenshot = new SwipeToScreenshotListener(mContext, () -> takeScreenshot(
+                 SCREENSHOT_KEY_OTHER));
+         mWakeGestureListener = new MyWakeGestureListener(mContext, mHandler);
++        mWakeGestureRespectsSmartCover = mContext.getResources().getBoolean(
++                com.android.internal.R.bool.config_wakeGestureRespectsSmartCover);
+         mSettingsObserver = new SettingsObserver(mHandler);
+         mSettingsObserver.observe();
+         mModifierShortcutManager = new ModifierShortcutManager(mContext,
+@@ -3109,13 +3119,11 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+             enableSwipeThreeFingerGesture(threeFingerGesture);
+ 
+             // Configure wake gesture.
+-            boolean wakeGestureEnabledSetting = Settings.Secure.getIntForUser(resolver,
+-                    Settings.Secure.WAKE_GESTURE_ENABLED, 0,
+-                    UserHandle.USER_CURRENT) != 0;
+-            if (mWakeGestureEnabledSetting != wakeGestureEnabledSetting) {
+-                mWakeGestureEnabledSetting = wakeGestureEnabledSetting;
+-                updateWakeGestureListenerLp();
+-            }
++            mWakeGestureEnabledSetting = Settings.Secure.getIntForUser(resolver,
++                    Settings.Secure.WAKE_GESTURE_ENABLED, 0, mCurrentUserId) != 0;
++            mSmartCoverEnabled = Settings.System.getIntForUser(resolver,
++                    SMART_COVER_MODE, 1, mCurrentUserId) == 1;
++            updateWakeGestureListenerLp();
+ 
+             // use screen off timeout setting as the timeout for the lockscreen
+             mLockScreenTimeout = Settings.System.getIntForUser(resolver,
+@@ -3258,7 +3266,10 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+     }
+ 
+     private boolean shouldEnableWakeGestureLp() {
+-        return mWakeGestureEnabledSetting && !mDefaultDisplayPolicy.isAwake()
++        return mWakeGestureEnabledSetting && !mWakeGestureUserSwitching
++                && !mDefaultDisplayPolicy.isAwake()
++                && (!mWakeGestureRespectsSmartCover || (mSystemBooted
++                && (!mSmartCoverEnabled || mDefaultDisplayPolicy.getLidState() != LID_CLOSED)))
+                 && (getLidBehavior() != LID_BEHAVIOR_SLEEP
+                 || mDefaultDisplayPolicy.getLidState() != LID_CLOSED)
+                 && mWakeGestureListener.isSupported();
+@@ -6655,7 +6666,12 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+ 
+     @Override
+     public void setCurrentUserLw(int newUserId) {
+-        mCurrentUserId = newUserId;
++        synchronized (mLock) {
++            mCurrentUserId = newUserId;
++            mWakeGestureEnabledSetting = false;
++            mWakeGestureListener.cancelWakeUpTrigger();
++        }
++        postUpdateSettings();
+         mKeyguardDelegate.setCurrentUser(newUserId);
+         StatusBarManagerInternal statusBar = getStatusBarManagerInternal();
+         if (statusBar != null) {
+@@ -6666,6 +6682,12 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+ 
+     @Override
+     public void setSwitchingUser(boolean switching) {
++        synchronized (mLock) {
++            mWakeGestureUserSwitching = switching;
++            // Invalidate even an accepted event queued by the previous user.
++            mWakeGestureListener.cancelWakeUpTrigger();
++        }
++        postUpdateSettings();
+         mKeyguardDelegate.setSwitchingUser(switching);
+         if (switching) {
+             dismissKeyboardShortcutsMenu();
+diff --git a/services/core/java/com/android/server/policy/WakeGestureListener.java b/services/core/java/com/android/server/policy/WakeGestureListener.java
+index 1d5d7ba..d478bf3 100644
+--- a/services/core/java/com/android/server/policy/WakeGestureListener.java
++++ b/services/core/java/com/android/server/policy/WakeGestureListener.java
+@@ -16,85 +16,145 @@
+ 
+ package com.android.server.policy;
+ 
+-import android.os.Handler;
+ import android.content.Context;
+ import android.hardware.Sensor;
++import android.hardware.SensorEvent;
++import android.hardware.SensorEventListener;
+ import android.hardware.SensorManager;
+ import android.hardware.TriggerEvent;
+ import android.hardware.TriggerEventListener;
++import android.os.Handler;
+ 
+ import java.io.PrintWriter;
+ 
+-/**
+- * Watches for wake gesture sensor events then invokes the listener.
+- */
++/** Watches for the configured wake sensor, including special-trigger pickup sensors. */
+ public abstract class WakeGestureListener {
+-    private static final String TAG = "WakeGestureListener";
+-
+     private final SensorManager mSensorManager;
+     private final Handler mHandler;
+-
+     private final Object mLock = new Object();
+-
++    private final Sensor mSensor;
++    private long mGeneration;
+     private boolean mTriggerRequested;
+-    private Sensor mSensor;
++    private boolean mWakeUpPending;
++    private TriggerEventListener mTriggerListener;
++    private SensorEventListener mEventListener;
+ 
+     public WakeGestureListener(Context context, Handler handler) {
+-        mSensorManager = (SensorManager)context.getSystemService(Context.SENSOR_SERVICE);
++        mSensorManager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
+         mHandler = handler;
+-
+-        mSensor = mSensorManager.getDefaultSensor(Sensor.TYPE_WAKE_GESTURE);
++        int type = context.getResources().getInteger(
++                com.android.internal.R.integer.config_wakeGestureSensorType);
++        Sensor sensor = mSensorManager == null ? null
++                : mSensorManager.getDefaultSensor(type, true);
++        mSensor = sensor != null && (sensor.getReportingMode() == Sensor.REPORTING_MODE_ONE_SHOT
++                || sensor.getReportingMode() == Sensor.REPORTING_MODE_SPECIAL_TRIGGER)
++                ? sensor : null;
+     }
+ 
+-    public abstract void onWakeUp();
++    /** The policy checks this generation again under its own state lock before waking. */
++    public abstract void onWakeUp(long generation);
+ 
+     public boolean isSupported() {
++        return mSensor != null;
++    }
++
++    public boolean isCurrentGeneration(long generation) {
+         synchronized (mLock) {
+-            return mSensor != null;
++            return generation == mGeneration;
+         }
+     }
+ 
+     public void requestWakeUpTrigger() {
+         synchronized (mLock) {
+-            if (mSensor != null && !mTriggerRequested) {
+-                mTriggerRequested = true;
+-                mSensorManager.requestTriggerSensor(mListener, mSensor);
++            if (mSensor == null || mTriggerRequested || mWakeUpPending) {
++                return;
++            }
++            final long generation = ++mGeneration;
++            if (mSensor.getReportingMode() == Sensor.REPORTING_MODE_ONE_SHOT) {
++                mTriggerListener = new TriggerEventListener() {
++                    @Override
++                    public void onTrigger(TriggerEvent event) {
++                        acceptEvent(generation, event.sensor);
++                    }
++                };
++                mTriggerRequested = mSensorManager.requestTriggerSensor(mTriggerListener, mSensor);
++                if (!mTriggerRequested) {
++                    mTriggerListener = null;
++                }
++            } else {
++                mEventListener = new SensorEventListener() {
++                    @Override
++                    public void onSensorChanged(SensorEvent event) {
++                        // The selected special-trigger pickup contract uses 1 for pickup.
++                        // Put-down (0/2) must not wake or consume the armed listener.
++                        if (event.values.length > 0 && event.values[0] == 1.0f) {
++                            acceptEvent(generation, event.sensor);
++                        }
++                    }
++
++                    @Override
++                    public void onAccuracyChanged(Sensor sensor, int accuracy) { }
++                };
++                mTriggerRequested = mSensorManager.registerListener(mEventListener, mSensor,
++                        SensorManager.SENSOR_DELAY_NORMAL, mHandler);
++                if (!mTriggerRequested) {
++                    mEventListener = null;
++                }
+             }
+         }
+     }
+ 
+-    public void cancelWakeUpTrigger() {
++    private void acceptEvent(long generation, Sensor sensor) {
+         synchronized (mLock) {
+-            if (mSensor != null && mTriggerRequested) {
+-                mTriggerRequested = false;
+-                mSensorManager.cancelTriggerSensor(mListener, mSensor);
++            if (!mTriggerRequested || generation != mGeneration || sensor != mSensor) {
++                return;
+             }
++            mTriggerRequested = false;
++            mWakeUpPending = true;
++            if (mEventListener != null) {
++                mSensorManager.unregisterListener(mEventListener, mSensor);
++                mEventListener = null;
++            }
++            mTriggerListener = null; // One-shot registration has already ended in SensorManager.
++            mHandler.post(() -> {
++                // Never acquire the policy lock while holding the listener lock.
++                try {
++                    if (isCurrentGeneration(generation)) {
++                        onWakeUp(generation);
++                    }
++                } finally {
++                    synchronized (mLock) {
++                        if (generation == mGeneration) {
++                            mWakeUpPending = false;
++                        }
++                    }
++                }
++            });
+         }
+     }
+ 
+-    public void dump(PrintWriter pw, String prefix) {
++    public void cancelWakeUpTrigger() {
+         synchronized (mLock) {
+-            pw.println(prefix + TAG);
+-            prefix += "  ";
+-            pw.println(prefix + "mTriggerRequested=" + mTriggerRequested);
+-            pw.println(prefix + "mSensor=" + mSensor);
+-        }
+-    }
+-
+-    private final TriggerEventListener mListener = new TriggerEventListener() {
+-        @Override
+-        public void onTrigger(TriggerEvent event) {
+-            synchronized (mLock) {
+-                mTriggerRequested = false;
+-                mHandler.post(mWakeUpRunnable);
++            mWakeUpPending = false;
++            ++mGeneration; // Also invalidate an accepted event already queued on the handler.
++            if (mTriggerListener != null) {
++                mSensorManager.cancelTriggerSensor(mTriggerListener, mSensor);
++                mTriggerListener = null;
+             }
++            if (mEventListener != null) {
++                mSensorManager.unregisterListener(mEventListener, mSensor);
++                mEventListener = null;
++            }
++            mTriggerRequested = false;
+         }
+-    };
++    }
+ 
+-    private final Runnable mWakeUpRunnable = new Runnable() {
+-        @Override
+-        public void run() {
+-            onWakeUp();
++    public void dump(PrintWriter pw, String prefix) {
++        synchronized (mLock) {
++            pw.println(prefix + "WakeGestureListener");
++            pw.println(prefix + "  mTriggerRequested=" + mTriggerRequested);
++            pw.println(prefix + "  mGeneration=" + mGeneration);
++            pw.println(prefix + "  mSensor=" + mSensor);
+         }
+-    };
++    }
+ }

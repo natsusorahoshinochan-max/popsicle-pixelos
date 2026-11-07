@@ -1,0 +1,6 @@
+id=popsicle-arr
+name=Popsicle PixelOS ARR Integration
+version=0.6
+versionCode=6
+author=PixelOS popsicle bring-up
+description=Patched display service: main-screen ARR default and active-mode capability updates. Matching PixelOS services.jar only. Disable and reboot to restore.

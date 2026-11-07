@@ -1,0 +1,23 @@
+--- a/libselinux/Android.bp
++++ b/libselinux/Android.bp
+@@ -344,3 +344,20 @@
+     clippy_lints: "none",
+     lints: "none",
+ }
++
++// Use the pinned file-context backend and real inode type for new image paths.
++cc_binary_host {
++    name: "popsicle_selabel_lookup",
++    defaults: ["libselinux_defaults"],
++    srcs: ["utils/selabel_lookup.c"],
++    static_libs: [
++        "libselinux",
++        "libsepol",
++    ],
++    stl: "",
++    target: {
++        darwin: {
++            enabled: false,
++        },
++    },
++}

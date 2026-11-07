@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.pixelos.popsicle.brightnesscurve"
+    android:versionCode="1" android:versionName="0.1">
+    <uses-sdk android:minSdkVersion="37" android:targetSdkVersion="37" />
+    <overlay android:targetPackage="android" android:isStatic="true"
+        android:priority="999" />
+    <application android:hasCode="false" android:label="Popsicle brightness curve" />
+</manifest>

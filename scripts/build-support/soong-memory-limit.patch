@@ -1,0 +1,14 @@
+diff --git a/ui/build/soong.go b/ui/build/soong.go
+--- a/ui/build/soong.go
++++ b/ui/build/soong.go
+@@ -215,6 +215,10 @@
+ 
+ 	commonArgs = append(commonArgs, "-l", filepath.Join(pb.config.FileListDir(), "Android.bp.list"))
+ 	invocationEnv := make(map[string]string)
++	// Preserve the host Go memory limit across the builder's clean environment.
++	if limit := os.Getenv("GOMEMLIMIT"); limit != "" {
++		invocationEnv["GOMEMLIMIT"] = limit
++	}
+ 	if pb.debugPort != "" {
+ 		//debug mode
+ 		commonArgs = append(commonArgs, "--delve_listen", pb.debugPort,

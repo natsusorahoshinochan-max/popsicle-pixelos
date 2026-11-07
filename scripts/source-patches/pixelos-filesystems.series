@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+build/soong 321ecf4fc740482603b917c5de30a0e27e97595e custom-super-image/0001-custom-logical-partitions.patch

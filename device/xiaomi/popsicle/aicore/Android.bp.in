@@ -1,0 +1,8 @@
+// Official Google Play APK set; original APK signatures are preserved.
+android_app_set {
+    name: "PopsicleAICore",
+    owner: "pixel/gms",
+    set: "aicore.apks",
+    privileged: true,
+    product_specific: true,
+}

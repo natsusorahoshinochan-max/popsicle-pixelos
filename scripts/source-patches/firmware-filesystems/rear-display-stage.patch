@@ -1,0 +1,11 @@
+diff --git a/core/popsicle_firmware_filesystems.mk b/core/popsicle_firmware_filesystems.mk
+--- a/core/popsicle_firmware_filesystems.mk
++++ b/core/popsicle_firmware_filesystems.mk
+@@ -68,6 +68,7 @@
+ POPSICLE_VENDOR_STAGE_MODULES := \
+     etc/build_flags.json:build_flag_vendor \
+     etc/vintf/compatibility_matrix.xml:vendor_compatibility_matrix.xml \
++    etc/displayconfig/display_layout_configuration.xml:popsicle_display_layout_configuration \
+     bin/sh:sh_vendor \
+     bin/awk:awk_vendor \
+     bin/boringssl_self_test64:boringssl_self_test_vendor \

@@ -1,0 +1,27 @@
+--- a/services/core/java/com/android/server/display/DisplayManagerService.java
++++ b/services/core/java/com/android/server/display/DisplayManagerService.java
+@@ -3508,9 +3508,22 @@
+         mLogicalDisplayMapper.forEachLocked((LogicalDisplay display) -> {
+             final DisplayDevice device = display.getPrimaryDisplayDeviceLocked();
+             final SurfaceControl.Transaction displayTransaction =
+-                    displayTransactions.get(display.getDisplayIdLocked(), t);
++                    displayTransactions.get(display.getDisplayIdLocked());
+             if (device != null) {
+-                configureDisplayLocked(displayTransaction, device);
++                if (displayTransaction != null) {
++                    configureDisplayLocked(displayTransaction, device);
++                } else {
++                    // WMS has not created a DisplayContent for this display yet. Do not
++                    // leave its configuration in another display's pending transaction:
++                    // that transaction may be merged after this display's newer one once
++                    // its DisplayContent exists, overwriting the newer configuration.
++                    // There are no WMS surfaces for this display to synchronize with yet.
++                    try (SurfaceControl.Transaction initialTransaction =
++                            new SurfaceControl.Transaction()) {
++                        configureDisplayLocked(initialTransaction, device);
++                        initialTransaction.apply();
++                    }
++                }
+                 mModeRequestManager.setSpecs(display.getDisplayIdLocked(), device,
+                         display.getDesiredDisplayModeSpecsLocked());
+             }

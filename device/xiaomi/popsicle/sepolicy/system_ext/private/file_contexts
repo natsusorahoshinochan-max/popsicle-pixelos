@@ -1,0 +1,5 @@
+/system_ext/bin/popsicle_ims_audio_adapter u:object_r:popsicle_ims_adapter_exec:s0
+
+# DRM primary nodes used by recovery's minui display backend.
+# The generic /dev fallback is device, which recovery cannot open in enforcing.
+/dev/dri/card[0-9]+ u:object_r:graphics_device:s0

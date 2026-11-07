@@ -1,0 +1,20 @@
+diff --git a/java/dex.go b/java/dex.go
+index 44f2fc1..0db1973 100644
+--- a/java/dex.go
++++ b/java/dex.go
+@@ -819,7 +819,14 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams,
+ 	traceReferencesSources := android.Paths{}
+ 	ctx.VisitDirectDepsProxyWithTag(traceReferencesTag, func(m android.ModuleProxy) {
+ 		if dep, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
+-			traceReferencesSources = append(traceReferencesSources, dep.ImplementationJars...)
++			_, isDexImport := android.OtherModuleProvider(ctx, m, JavaDexImportInfoProvider)
++			if len(dep.ImplementationJars) > 0 {
++				traceReferencesSources = append(traceReferencesSources, dep.ImplementationJars...)
++			} else if isDexImport && dep.BootDexJarPath.Valid() {
++				// dex_import has no class-file implementation jar. TraceReferences also
++				// accepts DEX sources, so preserve its references to the target library.
++				traceReferencesSources = append(traceReferencesSources, dep.BootDexJarPath.Path())
++			}
+ 		}
+ 	})
+ 	if len(traceReferencesSources) > 0 {

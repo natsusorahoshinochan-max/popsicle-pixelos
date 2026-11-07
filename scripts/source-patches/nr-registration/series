@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+frameworks/opt/telephony e531e45dcf5fc25d1e4c26b6a103c1a00de2c64f 0001-popsicle-nr-ca-registration.patch

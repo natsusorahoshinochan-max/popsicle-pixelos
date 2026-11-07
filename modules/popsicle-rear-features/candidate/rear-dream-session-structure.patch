@@ -1,0 +1,351 @@
+--- a/frameworks/base/services/core/java/com/android/server/dreams/DreamManagerService.java
++++ b/frameworks/base/services/core/java/com/android/server/dreams/DreamManagerService.java
+@@ -174,13 +174,7 @@
+     // Keep its token, controller and DOZE lock independent of the main-screen dream.
+     private static final ComponentName REAR_DOZE_COMPONENT = new ComponentName(
+             "com.xiaomi.subscreencenter", "com.xiaomi.subscreencenter.doze.DozeService");
+-    @GuardedBy("mLock")
+-    private DreamRecord mRearDream;
+-    @GuardedBy("mLock")
+-    private int mRearDreamGroupId = Display.INVALID_DISPLAY_GROUP;
+-    @GuardedBy("mLock")
+-    private PowerManager.WakeLock mRearDozeWakeLock;
+-    private DreamController mRearController;
++    private final RearDreamSessionOwner mRearDreams = new RearDreamSessionOwner();
+ 
+     private boolean mForceAmbientDisplayEnabled;
+     private SettingsObserver mSettingsObserver;
+@@ -509,66 +503,8 @@
+     public void onStart() {
+         publishBinderService(DreamService.DREAM_SERVICE, new BinderService(mContext));
+         publishLocalService(DreamManagerInternal.class, new LocalService());
+-        mRearController = new DreamController(mContext, mHandler, new DreamController.Listener() {
+-            @Override
+-            public void onDreamStarted(Binder token) { }
+-
+-            @Override
+-            public void onDreamStopped(Binder token) {
+-                synchronized (mLock) {
+-                    if (mRearDream != null && mRearDream.token == token) {
+-                        cleanupRearDreamLocked();
+-                    }
+-                }
+-            }
+-        }, true);
+-        publishLocalService(RearDreamManagerInternal.class, new RearDreamManagerInternal() {
+-            @Override
+-            public void startDream(int groupId, int displayId) {
+-                synchronized (mLock) {
+-                    if (mRearDream != null) {
+-                        return;
+-                    }
+-                    final int userId = mInjector.getCurrentUser();
+-                    final DreamComponentsResolver resolver = getOrCreateResolver(userId);
+-                    if (resolver == null || !resolver.isValid(REAR_DOZE_COMPONENT)) {
+-                        return;
+-                    }
+-                    mRearDreamGroupId = groupId;
+-                    mRearDream = new DreamRecord(REAR_DOZE_COMPONENT, userId, false, true);
+-                    mRearDozeWakeLock = mPowerManager.newWakeLock(PowerManager.DOZE_WAKE_LOCK,
+-                            DOZE_WAKE_LOCK_TAG + ":rear", displayId);
+-                    final Binder token = mRearDream.token;
+-                    final PowerManager.WakeLock wakeLock = mPowerManager.newWakeLock(
+-                            PowerManager.PARTIAL_WAKE_LOCK, DREAM_WAKE_LOCK_TAG + ":rear");
+-                    mHandler.post(wakeLock.wrap(() -> {
+-                        synchronized (mLock) {
+-                            if (mRearDream == null || mRearDream.token != token) {
+-                                return;
+-                            }
+-                        }
+-                        mRearController.startDream(token, REAR_DOZE_COMPONENT, false, true,
+-                                userId, wakeLock, null, "rear display doze");
+-                    }));
+-                }
+-            }
+-
+-            @Override
+-            public void stopDream(int groupId, String reason) {
+-                synchronized (mLock) {
+-                    if (mRearDream != null && mRearDreamGroupId == groupId) {
+-                        stopRearDreamLocked(reason);
+-                    }
+-                }
+-            }
+-
+-            @Override
+-            public boolean isDreaming(int groupId) {
+-                synchronized (mLock) {
+-                    return mRearDream != null && mRearDreamGroupId == groupId;
+-                }
+-            }
+-        });
++        mRearDreams.initializeController();
++        publishLocalService(RearDreamManagerInternal.class, mRearDreams);
+     }
+ 
+     @Override
+@@ -646,7 +582,7 @@
+             writePulseGestureEnabled();
+             synchronized (mLock) {
+                 stopDreamLocked(false /*immediate*/, "user switched");
+-                stopRearDreamLocked("user switched");
++                mRearDreams.stopLocked("user switched");
+             }
+         });
+     }
+@@ -709,8 +645,7 @@
+             pw.println("DREAM MANAGER (dumpsys dreams)");
+             pw.println();
+             pw.println("mCurrentDream=" + mCurrentDream);
+-            pw.println("mRearDream=" + mRearDream);
+-            pw.println("mRearDreamGroupId=" + mRearDreamGroupId);
++            mRearDreams.dumpLocked(pw);
+             pw.println("mForceAmbientDisplayEnabled=" + mForceAmbientDisplayEnabled);
+             pw.println("mDreamsOnlyEnabledForDockUser=" + mDreamsOnlyEnabledForDockUser);
+             pw.println("mDreamsEnabledSetting=" + mDreamsEnabledSetting);
+@@ -988,8 +923,7 @@
+         // locks are held and the user activity timeout has expired then the
+         // device may simply go to sleep.
+         synchronized (mLock) {
+-            if (mRearDream != null && mRearDream.token == token) {
+-                stopRearDreamLocked("finished self");
++            if (mRearDreams.tryFinishLocked(token, "finished self")) {
+                 return;
+             }
+             if (mCurrentDream != null && mCurrentDream.token == token) {
+@@ -1097,16 +1031,8 @@
+                 + ", useNormalBrightnessForDoze=" + useNormalBrightnessForDoze);
+ 
+         synchronized (mLock) {
+-            if (mRearDream != null && mRearDream.token == token) {
+-                mRearDream.dozeScreenState = screenState;
+-                mRearDream.dozeScreenBrightness = screenBrightness;
+-                LocalServices.getService(RearDreamManagerInternal.Power.class).setDozeOverride(
+-                        mRearDreamGroupId, screenState, reason, screenBrightness,
+-                        useNormalBrightnessForDoze);
+-                if (!mRearDream.isDozing) {
+-                    mRearDream.isDozing = true;
+-                    mRearDozeWakeLock.acquire();
+-                }
++            if (mRearDreams.tryStartDozingLocked(token, screenState, reason, screenBrightness,
++                    useNormalBrightnessForDoze)) {
+                 return;
+             }
+             if (mCurrentDream != null && mCurrentDream.token == token && mCurrentDream.canDoze) {
+@@ -1128,8 +1054,7 @@
+         }
+ 
+         synchronized (mLock) {
+-            if (mRearDream != null && mRearDream.token == token) {
+-                stopRearDozingLocked();
++            if (mRearDreams.tryStopDozingLocked(token)) {
+                 return;
+             }
+             if (mCurrentDream != null && mCurrentDream.token == token && mCurrentDream.isDozing) {
+@@ -1426,37 +1351,175 @@
+         }
+     }
+ 
+-    @GuardedBy("mLock")
+-    private void stopRearDozingLocked() {
+-        if (mRearDream.isDozing) {
+-            mRearDream.isDozing = false;
+-            mRearDozeWakeLock.release();
+-        }
+-        LocalServices.getService(RearDreamManagerInternal.Power.class).setDozeOverride(
+-                mRearDreamGroupId, Display.STATE_UNKNOWN, Display.STATE_REASON_UNKNOWN,
+-                PowerManager.BRIGHTNESS_INVALID_FLOAT, false);
+-    }
+-
+-    @GuardedBy("mLock")
+-    private void cleanupRearDreamLocked() {
+-        if (mRearDream == null) {
+-            return;
+-        }
+-        stopRearDozingLocked();
+-        final int groupId = mRearDreamGroupId;
+-        mRearDream = null;
+-        mRearDozeWakeLock = null;
+-        mRearDreamGroupId = Display.INVALID_DISPLAY_GROUP;
+-        LocalServices.getService(RearDreamManagerInternal.Power.class).dreamStopped(groupId);
+-    }
+-
+-    @GuardedBy("mLock")
+-    private void stopRearDreamLocked(String reason) {
+-        if (mRearDream == null) {
+-            return;
+-        }
+-        cleanupRearDreamLocked();
+-        mHandler.post(() -> mRearController.stopDream(true, reason));
++    /** Owns the independent windowless rear dream under the existing DMS lock. */
++    private final class RearDreamSessionOwner implements RearDreamManagerInternal {
++        @GuardedBy("mLock")
++        @Nullable
++        private Session mSession;
++        // Controller operations remain on the existing dream handler.
++        private DreamController mController;
++
++        private final class Session {
++            final DreamRecord dream;
++            final int groupId;
++            final int displayId;
++            final PowerManager.WakeLock dozeWakeLock;
++
++            Session(int groupId, int displayId, int userId) {
++                dream = new DreamRecord(REAR_DOZE_COMPONENT, userId, false, true);
++                this.groupId = groupId;
++                this.displayId = displayId;
++                dozeWakeLock = mPowerManager.newWakeLock(PowerManager.DOZE_WAKE_LOCK,
++                        DOZE_WAKE_LOCK_TAG + ":rear", displayId);
++            }
++        }
++
++        void initializeController() {
++            mController = new DreamController(mContext, mHandler, new DreamController.Listener() {
++                @Override
++                public void onDreamStarted(Binder token) { }
++
++                @Override
++                public void onDreamStopped(Binder token) {
++                    synchronized (mLock) {
++                        if (ownsTokenLocked(token)) {
++                            cleanupLocked();
++                        }
++                    }
++                }
++            }, true);
++        }
++
++        @Override
++        public void startDream(int groupId, int displayId) {
++            synchronized (mLock) {
++                if (mSession != null) {
++                    return;
++                }
++                final int userId = mInjector.getCurrentUser();
++                final DreamComponentsResolver resolver = getOrCreateResolver(userId);
++                if (resolver == null || !resolver.isValid(REAR_DOZE_COMPONENT)) {
++                    return;
++                }
++                // Publish acceptance synchronously: Sandman queries before binding completes.
++                mSession = new Session(groupId, displayId, userId);
++                final Binder token = mSession.dream.token;
++                final PowerManager.WakeLock wakeLock = mPowerManager.newWakeLock(
++                        PowerManager.PARTIAL_WAKE_LOCK, DREAM_WAKE_LOCK_TAG + ":rear");
++                mHandler.post(wakeLock.wrap(() -> {
++                    synchronized (mLock) {
++                        if (!ownsTokenLocked(token)) {
++                            return;
++                        }
++                    }
++                    mController.startDream(token, REAR_DOZE_COMPONENT, false, true,
++                            userId, wakeLock, null, "rear display doze");
++                }));
++            }
++        }
++
++        @Override
++        public void stopDream(int groupId, String reason) {
++            synchronized (mLock) {
++                if (mSession != null && mSession.groupId == groupId) {
++                    stopLocked(reason);
++                }
++            }
++        }
++
++        /** Includes accepted sessions whose asynchronous binding has not completed. */
++        @Override
++        public boolean isDreaming(int groupId) {
++            synchronized (mLock) {
++                return mSession != null && mSession.groupId == groupId;
++            }
++        }
++
++        @GuardedBy("mLock")
++        private boolean ownsTokenLocked(IBinder token) {
++            return mSession != null && mSession.dream.token == token;
++        }
++
++        @GuardedBy("mLock")
++        boolean tryFinishLocked(IBinder token, String reason) {
++            if (!ownsTokenLocked(token)) {
++                return false;
++            }
++            stopLocked(reason);
++            return true;
++        }
++
++        @GuardedBy("mLock")
++        boolean tryStartDozingLocked(IBinder token, int screenState,
++                @Display.StateReason int reason, float screenBrightness,
++                boolean useNormalBrightnessForDoze) {
++            if (!ownsTokenLocked(token)) {
++                return false;
++            }
++            final DreamRecord dream = mSession.dream;
++            dream.dozeScreenState = screenState;
++            dream.dozeScreenBrightness = screenBrightness;
++            LocalServices.getService(RearDreamManagerInternal.Power.class).setDozeOverride(
++                    mSession.groupId, screenState, reason, screenBrightness,
++                    useNormalBrightnessForDoze);
++            if (!dream.isDozing) {
++                dream.isDozing = true;
++                mSession.dozeWakeLock.acquire();
++            }
++            return true;
++        }
++
++        @GuardedBy("mLock")
++        boolean tryStopDozingLocked(IBinder token) {
++            if (!ownsTokenLocked(token)) {
++                return false;
++            }
++            stopDozingLocked();
++            return true;
++        }
++
++        // Removing the doze override does not end the accepted dream session.
++        @GuardedBy("mLock")
++        private void stopDozingLocked() {
++            if (mSession.dream.isDozing) {
++                mSession.dream.isDozing = false;
++                mSession.dozeWakeLock.release();
++            }
++            LocalServices.getService(RearDreamManagerInternal.Power.class).setDozeOverride(
++                    mSession.groupId, Display.STATE_UNKNOWN, Display.STATE_REASON_UNKNOWN,
++                    PowerManager.BRIGHTNESS_INVALID_FLOAT, false);
++        }
++
++        @GuardedBy("mLock")
++        private void cleanupLocked() {
++            if (mSession == null) {
++                return;
++            }
++            stopDozingLocked();
++            final int groupId = mSession.groupId;
++            mSession = null;
++            LocalServices.getService(RearDreamManagerInternal.Power.class).dreamStopped(groupId);
++        }
++
++        @GuardedBy("mLock")
++        void stopLocked(String reason) {
++            if (mSession == null) {
++                return;
++            }
++            cleanupLocked();
++            // Keep this stop queued even if a new session is accepted before it runs.
++            // The shared handler orders the old controller stop before the new start.
++            mHandler.post(() -> mController.stopDream(true, reason));
++        }
++
++        @GuardedBy("mLock")
++        void dumpLocked(PrintWriter pw) {
++            pw.println("mRearDream=" + (mSession != null ? mSession.dream : null));
++            pw.println("mRearDreamGroupId=" + (mSession != null ? mSession.groupId
++                    : Display.INVALID_DISPLAY_GROUP));
++            pw.println("mRearDreamDisplayId=" + (mSession != null ? mSession.displayId
++                    : Display.INVALID_DISPLAY));
++        }
+     }
+ 
+     private void writePulseGestureEnabled() {

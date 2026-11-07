@@ -1,0 +1,17 @@
+diff --git a/gpt-utils/Android.bp b/gpt-utils/Android.bp
+--- a/gpt-utils/Android.bp
++++ b/gpt-utils/Android.bp
+@@ -6,7 +6,12 @@
+ cc_library {
+     name: "libgptutils.qti",
+     export_include_dirs: ["."],
+-    header_libs: ["generated_kernel_headers"],
++    // BSG uses the public UAPI exported by libc. Only the legacy UFS ioctl
++    // branch needs device kernel headers for scsi/ufs/{ioctl,ufs}.h.
++    header_libs: select(soong_config_variable("QTI_GPT_UTILS", "USE_BSG_FRAMEWORK"), {
++        false: ["generated_kernel_headers"],
++        default: [],
++    }),
+     recovery_available: true,
+     shared_libs: [
+         "libcutils",

@@ -1,0 +1,6 @@
+id=popsicle-statusbar-alignment
+name=PixelOS status bar alignment (trial)
+version=0.1
+versionCode=1
+author=PixelOS popsicle bring-up
+description=Matching-ROM status bar icon alignment trial. Preserves cutout and bar heights. Disable and reboot to roll back. Not approved for ROM integration.

@@ -1,0 +1,3 @@
+# Fixed PixelOS ROM production patch order.
+system/netd 43c893c7f33de178d6edaf5be49aed0794b3a917 pixelos-netd-vpn-recovery.patch
+packages/modules/Connectivity 12221cef10c09c64c8af109a5361e65b13c4c794 pixelos-connectivity-vpn-recovery.patch

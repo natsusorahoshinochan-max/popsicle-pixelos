@@ -1,0 +1,6 @@
+id=popsicle-global-telephony
+name=Popsicle Global Telephony
+version=0.1
+versionCode=1
+author=Kanoe
+description=PixelOS Android 17 global carrier configuration and APN repair, replacing the former 46001-only policy. ROM-built carrier service and matching preoptimization.

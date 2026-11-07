@@ -1,0 +1,6 @@
+# Fixed PixelOS ROM production patch order.
+packages/apps/Settings cee0f8941ad81fcb86b13ce90268eca3b69c5282 0001-face-hal-preview.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0002-ultrasonic-touch-lifecycle.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0003-ultrasonic-overlay-notification.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0004-ultrasonic-overlay-hidden.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0005-keyguard-off-display-transition.patch

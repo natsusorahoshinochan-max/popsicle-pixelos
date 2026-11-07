@@ -1,0 +1,2 @@
+# Local companion checkout override. Never include in source releases.
+/source-config.mk

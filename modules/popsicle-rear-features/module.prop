@@ -1,0 +1,6 @@
+id=popsicle-rear-boot-fix
+name=PixelOS popsicle Rear Display Fix
+version=v0.5
+versionCode=5
+author=Kanoe
+description=Matching full-ROM candidate: consolidated rear display readiness and Dream session ownership; retains rear boot, camera, AOD and gesture repairs. Reboot required.

@@ -1,0 +1,6 @@
+id=popsicle-camera-fixes
+name=Popsicle Camera Fixes
+version=0.1
+versionCode=1
+author=Kanoe
+description=PixelOS Android 17 camera output dimensions, JPEG capacity and system default gallery; matching complete ROM required.

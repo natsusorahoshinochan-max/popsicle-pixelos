@@ -1,0 +1,6 @@
+id=popsicle-nav-rotation-fix
+name=PixelOS navigation rotation fix (candidate)
+version=0.1
+versionCode=1
+author=PixelOS popsicle bring-up
+description=Matching full-ROM services and SystemUI rotation lifecycle candidate. Disable and reboot to roll back. Not approved for ROM integration.

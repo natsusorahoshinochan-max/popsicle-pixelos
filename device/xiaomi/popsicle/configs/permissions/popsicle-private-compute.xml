@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<config>
+    <!-- PCS has a restricted association list from Pixel Launcher. Complete
+         the ASI reciprocal connection and AICore model download connection. -->
+    <allow-association target="com.google.android.as.oss" allowed="com.google.android.as" />
+    <allow-association target="com.google.android.as.oss" allowed="com.google.android.aicore" />
+</config>

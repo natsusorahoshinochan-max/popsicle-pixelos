@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+java_binary_host {
+    name: "popsicle_camera_extension_cache",
+    srcs: ["CameraExtensionCache.java"],
+    static_libs: ["ow2-asm"],
+    main_class: "CameraExtensionCache",
+}

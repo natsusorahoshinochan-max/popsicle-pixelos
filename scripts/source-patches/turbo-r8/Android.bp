@@ -1,0 +1,54 @@
+// SPDX-License-Identifier: Apache-2.0
+package {
+    default_visibility: ["//visibility:private"],
+}
+
+java_import_host {
+    name: "popsicle-dex2jar-libs",
+    jars: [":popsicle-dex2jar-input-jars"],
+}
+
+java_binary_host {
+    name: "popsicle-dex2jar",
+    srcs: ["Ir2JRegAssignTransformer.java"],
+    main_class: "com.googlecode.dex2jar.tools.Dex2jarCmd",
+    // The host launcher needs the CLI and converter libraries in its own JAR.
+    static_libs: ["popsicle-dex2jar-libs"],
+}
+
+java_binary_host {
+    name: "popsicle-normalize-turbo",
+    srcs: ["NormalizeTurbo.java"],
+    main_class: "NormalizeTurbo",
+    static_libs: ["ow2-asm", "ow2-asm-tree", "ow2-asm-commons", "ow2-asm-analysis", "ow2-asm-util"],
+}
+
+python_binary_host {
+    name: "popsicle-generate-turbo",
+    main: "generate.py",
+    srcs: ["generate.py"],
+}
+
+java_genrule {
+    name: "popsicle-turboadapter-a17-jar",
+    visibility: ["//vendor:__subpackages__"],
+    tools: ["popsicle-generate-turbo", "popsicle-dex2jar", "popsicle-normalize-turbo"],
+    tool_files: ["dependencies.json", "dex-types.py", "filter-turbo.py"],
+    srcs: [
+        ":popsicle-turboadapter-source-apk",
+        ":framework-minus-apex{.jar.pre-jarjar}",
+        ":core-all{.jar}",
+        ":framework-configinfrastructure.impl{.hjar.pre-jarjar}",
+    ],
+    out: ["TurboAdapter-a17.jar"],
+    cmd: "$(location popsicle-generate-turbo) " +
+        "--apk $(location :popsicle-turboadapter-source-apk) " +
+        "--converter $(location popsicle-dex2jar) " +
+        "--normalizer $(location popsicle-normalize-turbo) " +
+        "--lock $(location dependencies.json) " +
+        "--dex-types $(location dex-types.py) --filter $(location filter-turbo.py) " +
+        "--framework $(location :framework-minus-apex{.jar.pre-jarjar}) " +
+        "--core $(location :core-all{.jar}) " +
+        "--configinfra $(location :framework-configinfrastructure.impl{.hjar.pre-jarjar}) " +
+        "--output $(out)",
+}

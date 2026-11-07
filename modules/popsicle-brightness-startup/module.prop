@@ -1,0 +1,6 @@
+id=popsicle-arr
+name=Popsicle PixelOS ARR + Brightness Startup Fix
+version=0.7
+versionCode=7
+author=PixelOS popsicle bring-up
+description=Matching PixelOS framework with ARR retained and one-shot stale light sample correction. Reboot required.

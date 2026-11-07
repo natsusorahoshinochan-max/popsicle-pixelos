@@ -1,0 +1,40 @@
+--- a/services/core/java/com/android/server/display/LocalDisplayAdapter.java
++++ b/services/core/java/com/android/server/display/LocalDisplayAdapter.java
+@@ -261,6 +261,7 @@
+         private boolean mDisplayModeSpecsInvalid;
+         private int mActiveColorMode;
+         private boolean mHasArrSupport;
++        private int mArrSupportSfModeId = INVALID_MODE_ID;
+         private FrameRateCategoryRate mFrameRateCategoryRate;
+         private float[] mSupportedRefreshRates = new float[0];
+         private Display.HdrCapabilities mHdrCapabilities;
+@@ -328,6 +329,7 @@
+             changed |= updateAllmSupport(dynamicInfo.autoLowLatencyModeSupported);
+             changed |= updateGameContentTypeSupport(dynamicInfo.gameContentTypeSupported);
+             changed |= updateHasArrSupportLocked(dynamicInfo.hasArrSupport);
++            mArrSupportSfModeId = dynamicInfo.activeDisplayModeId;
+             changed |= updateFrameRateCategoryRatesLocked(dynamicInfo.frameRateCategoryRate);
+             changed |= updateSupportedRefreshatesLocked(dynamicInfo.supportedRefreshRates);
+ 
+@@ -1291,16 +1293,17 @@
+                 long appVsyncOffsetNanos, long presentationDeadlineNanos,
+                 DisplayEventReceiver.FrameRateOverride[] overrides,
+                 float[] supportedRefreshRates) {
+-            final boolean modeChanged = mActiveSfDisplayMode.id != sfModeId;
+             boolean changed = updateActiveModeAndFrameOverrideChangedLocked(sfModeId,
+                     renderFrameRate, appVsyncOffsetNanos,
+                     presentationDeadlineNanos, overrides, supportedRefreshRates);
+-            if (modeChanged) {
+-                // ARR support belongs to the active SF configuration, not the boot mode.
+-                // Avoid a binder query for render-rate-only events within one ARR mode.
++            if (mArrSupportSfModeId != sfModeId) {
++                // A mode event can precede SF's active snapshot. Retry on its completion event,
++                // even if the mode/rate payload is unchanged. Once resolved, render-rate-only
++                // events within this configuration need no binder query.
+                 SurfaceControl.DynamicDisplayInfo dynamicInfo =
+                         mSurfaceControlProxy.getDynamicDisplayInfo(mPhysicalDisplayId);
+                 if (dynamicInfo != null && dynamicInfo.activeDisplayModeId == sfModeId) {
++                    mArrSupportSfModeId = sfModeId;
+                     changed |= updateHasArrSupportLocked(dynamicInfo.hasArrSupport);
+                     changed |= updateFrameRateCategoryRatesLocked(
+                             dynamicInfo.frameRateCategoryRate);

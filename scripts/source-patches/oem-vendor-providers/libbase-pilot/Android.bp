@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: Apache-2.0
+// Install this template in vendor/xiaomi/popsicle-private/prebuilt/oem-abi.
+// The library and its OEM notice texts are private inputs, not source payloads.
+
+soong_namespace {}
+
+package {
+    default_applicable_licenses: ["popsicle_oem_libbase_notice"],
+}
+
+license {
+    name: "popsicle_oem_libbase_notice",
+    visibility: [":__subpackages__"],
+    license_kinds: ["legacy_notice"],
+    license_text: ["libbase/NOTICE"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libbase.popsicle_oem",
+    source_module_name: "libbase",
+    stem: "libbase",
+    visibility: ["//visibility:public"],
+    vendor_available: true,
+    compile_multilib: "64",
+    prefer: true,
+    target: {
+        vendor: {
+            srcs: ["libbase/arm64/libbase.so"],
+        },
+    },
+    strip: {
+        none: true,
+    },
+    check_elf_files: true,
+    stl: "libc++",
+    shared_libs: ["liblog"],
+    system_shared_libs: ["libc", "libm", "libdl"],
+    double_loadable: true,
+    header_libs: ["libbase_headers"],
+    export_header_lib_headers: ["libbase_headers"],
+    min_sdk_version: "30",
+    apex_available: [
+        "//apex_available:anyapex",
+        "//apex_available:platform",
+    ],
+}

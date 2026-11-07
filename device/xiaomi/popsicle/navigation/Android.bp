@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: Apache-2.0
+python_binary_host {
+    name: "popsicle-navigation-overlay-resources",
+    main: "prepare.py",
+    srcs: ["prepare.py"],
+}
+
+java_genrule {
+    name: "popsicle-navigation-launcher-resources",
+    tools: ["popsicle-navigation-overlay-resources", "aapt2"],
+    srcs: [":NexusLauncherRelease"],
+    out: ["hidden-navigation-launcher-resources.zip"],
+    cmd: "$(location popsicle-navigation-overlay-resources) " +
+         "--aapt $(location aapt2) --launcher $(location :NexusLauncherRelease) --output $(out)",
+}
+
+runtime_resource_overlay {
+    name: "PopsicleHiddenNavigationLauncher",
+    manifest: "launcher/AndroidManifest.xml",
+    resource_dirs: [],
+    resource_zips: [":popsicle-navigation-launcher-resources"],
+    // A shared resource package keeps target 0x7f references distinct from local IDs.
+    aaptflags: [
+        "--shared-lib",
+        "-I vendor/pixel/launcher/common/proprietary/system_ext/priv-app/NexusLauncherRelease/NexusLauncherRelease.apk",
+    ],
+    certificate: "platform",
+    product_specific: true,
+}
+
+runtime_resource_overlay {
+    name: "PopsicleHiddenNavigationFramework",
+    manifest: "framework/AndroidManifest.xml",
+    resource_dirs: ["framework/res"],
+    product_specific: true,
+    certificate: "platform",
+}

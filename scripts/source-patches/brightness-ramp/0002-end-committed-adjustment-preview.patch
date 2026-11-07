@@ -1,0 +1,67 @@
+--- a/services/core/java/com/android/server/display/brightness/strategy/AutomaticBrightnessStrategy.java
++++ b/services/core/java/com/android/server/display/brightness/strategy/AutomaticBrightnessStrategy.java
+@@ -261,15 +261,16 @@
+                     + " current=" + mAutoBrightnessAdjustment
+                     + " pending=" + mPendingAutoBrightnessAdjustment
+                     + " temporary=" + mTemporaryAutoBrightnessAdjustment
+-                    + " clear=" + (mAutoBrightnessAdjustment != mPendingAutoBrightnessAdjustment));
+-        }
++                    + " clear=true");
++        }
++        // A committed adjustment ends the preview even when its value did not change.
++        mTemporaryAutoBrightnessAdjustment = Float.NaN;
+         if (mAutoBrightnessAdjustment == mPendingAutoBrightnessAdjustment) {
+             mPendingAutoBrightnessAdjustment = Float.NaN;
+             return false;
+         }
+         mAutoBrightnessAdjustment = mPendingAutoBrightnessAdjustment;
+         mPendingAutoBrightnessAdjustment = Float.NaN;
+-        mTemporaryAutoBrightnessAdjustment = Float.NaN;
+         mAutoBrightnessAdjustmentChanged = true;
+         return true;
+     }
+--- a/services/core/java/com/android/server/display/DisplayPowerController.java
++++ b/services/core/java/com/android/server/display/DisplayPowerController.java
+@@ -712,6 +712,8 @@
+             }
+         }
+ 
++        mAutomaticBrightnessStrategy.setTemporaryAutoBrightnessAdjustment(Float.NaN);
++        mAutomaticBrightnessStrategy.updatePendingAutoBrightnessAdjustments();
+         handleBrightnessModeChange();
+         if (mBrightnessTracker != null) {
+             mBrightnessTracker.onSwitchUser(newUserId);
+@@ -2372,9 +2374,13 @@
+         MetricsLogger.action(log);
+     }
+ 
+-    private void handleSettingsChange() {
++    @VisibleForTesting
++    void handleSettingsChange(@Nullable Uri uri) {
+         mDisplayBrightnessController.handleSettingsChange();
+-        mAutomaticBrightnessStrategy.updatePendingAutoBrightnessAdjustments();
++        // Brightness-setting listeners also arrive here. They do not end an adjustment preview.
++        if (Settings.System.getUriFor(Settings.System.SCREEN_AUTO_BRIGHTNESS_ADJ).equals(uri)) {
++            mAutomaticBrightnessStrategy.updatePendingAutoBrightnessAdjustments();
++        }
+         mAutomaticBrightnessStrategy.setAutoBrightnessOneShotEnabled(
+                 getAutoBrightnessOneShotSetting());
+         sendUpdatePowerState();
+@@ -2929,7 +2935,7 @@
+                     if (mStopped) {
+                         return;
+                     }
+-                    handleSettingsChange();
++                    handleSettingsChange(null);
+                     break;
+ 
+                 case MSG_UPDATE_RBC:
+@@ -3057,7 +3063,7 @@
+                         + mIsWearChargingExperienceEnabled);
+                 sendUpdatePowerState();
+             } else {
+-                handleSettingsChange();
++                handleSettingsChange(uri);
+             }
+         }
+     }

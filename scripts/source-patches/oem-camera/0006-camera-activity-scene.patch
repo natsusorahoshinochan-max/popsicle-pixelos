@@ -1,0 +1,355 @@
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -8089,4 +8089,5 @@
+     <string name="config_oemRearDisplayUniqueId" translatable="false"></string>
+     <string name="config_oemRearHomeComponent" translatable="false"></string>
+     <bool name="config_oemRearSmartAssistantSupported">false</bool>
++    <bool name="config_enableOemCameraActivityScene">false</bool>
+ </resources>
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -6632,4 +6632,5 @@
+       <java-symbol type="string" name="config_oemRearDisplayUniqueId" />
+     <java-symbol type="string" name="config_oemRearHomeComponent" />
+     <java-symbol type="bool" name="config_oemRearSmartAssistantSupported" />
++    <java-symbol type="bool" name="config_enableOemCameraActivityScene" />
+ </resources>
+diff --git a/services/core/java/com/android/server/camera/CameraActivityScenePolicy.java b/services/core/java/com/android/server/camera/CameraActivityScenePolicy.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/camera/CameraActivityScenePolicy.java
+@@ -0,0 +1,128 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.camera;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++
++/** OEM camera scene contract. All state belongs to the service's single handler. */
++final class CameraActivityScenePolicy {
++    static final String VIDEO = "persist.vendor.vcb.video";
++    static final String SNAPSHOT = "persist.vendor.vcb.snapshot";
++    static final String ACTIVITY = "persist.vendor.vcb.activity";
++    static final String FACE = "persist.vendor.miface.registration.scenes";
++    static final String VIDEO_CALL = "persist.vendor.camera.3rdvideocall.scenes";
++    static final String HIGH_BLOB = "persist.vendor.camera.3rdhighResolutionBlob.scenes";
++    static final String LIVE = "persist.vendor.camera.3rdlive.scenes";
++    static final int RESUMED = 2;
++    private static final String WECHAT_VIDEO = "com.tencent.mm.plugin.voip.ui.VideoActivity";
++    private static final String WECHAT_MULTI = "com.tencent.mm.plugin.multitalk.ui.MultiTalkMainUI";
++
++    interface Properties {
++        String get(String key, String defaultValue);
++        void set(String key, String value);
++    }
++
++    private final Properties mProperties;
++    private final Map<String, List<String>> mConfig = new HashMap<>();
++    private boolean mIsVideocallResumed;
++
++    CameraActivityScenePolicy(Properties properties) {
++        mProperties = properties;
++    }
++
++    void reset() {
++        for (String key : new String[]{VIDEO, SNAPSHOT, FACE, VIDEO_CALL, HIGH_BLOB, LIVE}) {
++            mProperties.set(key, "false");
++        }
++        mProperties.set(ACTIVITY, "0");
++        mIsVideocallResumed = false;
++    }
++
++    // Default file first, then ODM: replace individual named lists, not the whole map.
++    // Completed entries survive a later malformed entry, as in the OEM parser.
++    void loadConfig(String content) throws JSONException {
++        if (content.isEmpty() || "default".equals(content)) return;
++        JSONObject root = new JSONObject(content);
++        if (!root.has("configs")) return;
++        JSONArray configs = root.getJSONArray("configs");
++        for (int i = 0; i < configs.length(); i++) {
++            JSONObject config = configs.optJSONObject(i);
++            if (config == null || !config.has("config")) continue;
++            JSONArray values = config.getJSONArray("config");
++            List<String> list = new ArrayList<>();
++            for (int j = 0; j < values.length(); j++) list.add(values.getString(j));
++            mConfig.put(config.optString("name"), list);
++        }
++    }
++
++    void onActivityChanged(String component) {
++        if (component != null && "false".equals(mProperties.get(VIDEO, "false"))
++                && isWechatVideo(component)) {
++            mProperties.set(VIDEO, "true");
++            mIsVideocallResumed = true;
++        }
++    }
++
++    void onActivityState(String packageName, String activityName, int state, boolean rear) {
++        if (packageName == null || activityName == null) return;
++        if (state != RESUMED) {
++            if (state > RESUMED && isWechatVideo(activityName) && mIsVideocallResumed) {
++                mIsVideocallResumed = false;
++            }
++            return;
++        }
++        mIsVideocallResumed = "true".equals(mProperties.get(VIDEO, "false"))
++                && (packageName.contains("com.xiaomi.subscreencenter")
++                    || rear || mIsVideocallResumed);
++        if (isWechatVideo(activityName)) mIsVideocallResumed = true;
++        setIfChanged(VIDEO, mIsVideocallResumed);
++        setIfChanged(SNAPSHOT,
++                activityName.contains("com.tencent.mm.plugin.recordvideo.activity.MMRecordUI"));
++        setIfChanged(FACE,
++                activityName.contains("com.android.settings.faceunlock.MiuiNormalCameraMultiFaceInput"));
++        boolean video = containsAny("videocall_list", activityName);
++        boolean high = !video && containsAny("highresolutionblob_list", activityName);
++        boolean live = !video && !high && containsAny("tplive_list", activityName);
++        setIfChanged(VIDEO_CALL, video);
++        setIfChanged(HIGH_BLOB, high);
++        setIfChanged(LIVE, live);
++    }
++
++    private static boolean isWechatVideo(String activity) {
++        return activity.contains(WECHAT_VIDEO) || activity.contains(WECHAT_MULTI);
++    }
++
++    private boolean containsAny(String listName, String activity) {
++        List<String> list = mConfig.get(listName);
++        if (list != null) {
++            for (String item : list) if (activity.contains(item)) return true;
++        }
++        return false;
++    }
++
++    private void setIfChanged(String key, boolean value) {
++        String next = Boolean.toString(value);
++        if (!next.equals(mProperties.get(key, "false"))) mProperties.set(key, next);
++    }
++}
+diff --git a/services/core/java/com/android/server/camera/CameraActivitySceneStub.java b/services/core/java/com/android/server/camera/CameraActivitySceneStub.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/camera/CameraActivitySceneStub.java
+@@ -0,0 +1,130 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.camera;
++
++import android.content.ComponentName;
++import android.content.Context;
++import android.hardware.display.DisplayManager;
++import android.os.Handler;
++import android.os.SystemProperties;
++import android.util.Slog;
++import android.view.Display;
++
++import com.android.internal.R;
++
++import org.json.JSONException;
++
++import java.io.IOException;
++import java.nio.file.Files;
++import java.nio.file.Path;
++
++/** Original CameraOpt binary entry backed by real WM events and vendor properties. */
++public final class CameraActivitySceneStub {
++    private static final String TAG = "CameraActivityScene";
++    public static final CameraActivitySceneStub sInstance = new CameraActivitySceneStub();
++
++    private final CameraActivityScenePolicy mPolicy = new CameraActivityScenePolicy(
++            new CameraActivityScenePolicy.Properties() {
++                public String get(String key, String fallback) {
++                    return SystemProperties.get(key, fallback);
++                }
++                public void set(String key, String value) {
++                    SystemProperties.set(key, value);
++                }
++            });
++    private volatile Handler mHandler;
++    private Context mContext;
++    private String mRearUniqueId;
++    private boolean mBooted;
++    private ComponentName mLastComponent;
++
++    private CameraActivitySceneStub() {}
++
++    public static CameraActivitySceneStub getInstance() {
++        return sInstance;
++    }
++
++    public static synchronized CameraActivitySceneStub initialize(Context context, Handler handler) {
++        if (sInstance.mHandler == null) {
++            sInstance.mContext = context;
++            sInstance.mRearUniqueId = context.getString(R.string.config_oemRearDisplayUniqueId);
++            // Queue initialization before publishing the handler or accepting WM snapshots.
++            handler.post(sInstance::bootOnHandler);
++            sInstance.mHandler = handler;
++        }
++        return sInstance;
++    }
++
++    public void initSystemBooted() {
++        handler().post(this::bootOnHandler);
++    }
++
++    private void bootOnHandler() {
++        if (mBooted) return;
++        mPolicy.reset();
++        readConfig("/system_ext/etc/camerascene.json");
++        readConfig("/odm/etc/camera/camerascene.json");
++        mBooted = true;
++    }
++
++    private void readConfig(String file) {
++        Path path = Path.of(file);
++        if (!Files.isRegularFile(path)) return;
++        try {
++            mPolicy.loadConfig(Files.readString(path));
++        } catch (IOException | JSONException e) {
++            Slog.e(TAG, "Cannot load camera scene config " + file, e);
++        }
++    }
++
++    private Handler handler() {
++        Handler handler = mHandler;
++        if (handler == null) throw new IllegalStateException("Camera scene service is not initialized");
++        return handler;
++    }
++
++    /** Snapshot supplied under the WM lock; no ActivityRecord retained or property I/O under it. */
++    public void onActivityStateChanged(String packageName, String activityName, int state,
++            boolean isRearDisplay) {
++        handler().post(() -> mPolicy.onActivityState(packageName, activityName, state, isRearDisplay));
++    }
++
++    /** Snapshot of the focused/resumed component, distinct from foreground package changes. */
++    public void onActivityChanged(ComponentName component) {
++        handler().post(() -> {
++            if (component != null && !component.equals(mLastComponent)) {
++                mLastComponent = component;
++                mPolicy.onActivityChanged(component.toString());
++            }
++        });
++    }
++
++    /** Original CameraOpt descriptor: (IILjava/lang/String;Ljava/lang/String;Ljava/lang/String;III)V. */
++    public void notifyActivityStateChange(int pid, int uid, String packageName,
++            String activityName, String processName, int id, int state, int displayId) {
++        handler(); // Fail explicitly if the original caller runs before platform initialization.
++        Display display = mContext.getSystemService(DisplayManager.class).getDisplay(displayId);
++        boolean rear = display != null && isRearDisplay(displayId, display.getType(),
++                display.getUniqueId());
++        onActivityStateChanged(packageName, activityName, state, rear);
++    }
++
++    public boolean isRearDisplay(int id, int type, String uniqueId) {
++        return id != Display.DEFAULT_DISPLAY && type == Display.TYPE_INTERNAL
++                && !mRearUniqueId.isEmpty() && mRearUniqueId.equals(uniqueId);
++    }
++}
+diff --git a/services/core/java/com/android/server/wm/ActivityRecord.java b/services/core/java/com/android/server/wm/ActivityRecord.java
+--- a/services/core/java/com/android/server/wm/ActivityRecord.java
++++ b/services/core/java/com/android/server/wm/ActivityRecord.java
+@@ -5744,6 +5744,29 @@
+ 
+         final State prevState = mState;
+         mState = state;
++        if (mAtmService.mOemCameraActivityScene != null) {
++            final DisplayContent display = getDisplayContent();
++            final DisplayInfo displayInfo = display != null ? display.getDisplayInfo() : null;
++            final boolean rear = displayInfo != null
++                    && mAtmService.mOemCameraActivityScene.isRearDisplay(
++                            displayInfo.displayId, displayInfo.type, displayInfo.uniqueId);
++            // The OEM state enum has the same names; map explicitly rather than rely on ordinals.
++            final int cameraState = switch (state) {
++                case INITIALIZING -> 0;
++                case STARTED -> 1;
++                case RESUMED -> 2;
++                case PAUSING -> 3;
++                case PAUSED -> 4;
++                case STOPPING -> 5;
++                case STOPPED -> 6;
++                case FINISHING -> 7;
++                case DESTROYING -> 8;
++                case DESTROYED -> 9;
++                case RESTARTING_PROCESS -> 10;
++            };
++            mAtmService.mOemCameraActivityScene.onActivityStateChanged(
++                    packageName, mActivityComponent.getClassName(), cameraState, rear);
++        }
+         if (state == RESUMED) {
+             mAtmService.mOemForegroundInfoController.onActivityResumedLocked(
+                     this, mOemForegroundColdStart && prevState == INITIALIZING);
+diff --git a/services/core/java/com/android/server/wm/ActivityTaskManagerService.java b/services/core/java/com/android/server/wm/ActivityTaskManagerService.java
+--- a/services/core/java/com/android/server/wm/ActivityTaskManagerService.java
++++ b/services/core/java/com/android/server/wm/ActivityTaskManagerService.java
+@@ -903,6 +903,11 @@
+ 
+     public void onSystemReady() {
+         synchronized (mGlobalLock) {
++            if (mContext.getResources().getBoolean(
++                    com.android.internal.R.bool.config_enableOemCameraActivityScene)) {
++                mOemCameraActivityScene = com.android.server.camera.CameraActivitySceneStub.initialize(
++                        mContext, com.android.server.FgThread.getHandler());
++            }
+             final PackageManager pm = mContext.getPackageManager();
+             mHasHeavyWeightFeature = pm.hasSystemFeature(FEATURE_CANT_SAVE_STATE);
+             mHasLeanbackFeature = pm.hasSystemFeature(FEATURE_LEANBACK);
+@@ -1215,6 +1220,7 @@
+     }
+ 
+     final OemForegroundInfoController mOemForegroundInfoController;
++    com.android.server.camera.CameraActivitySceneStub mOemCameraActivityScene;
+ 
+     private void start() {
+         LocalServices.addService(ActivityTaskManagerInternal.class, mInternal);
+diff --git a/services/core/java/com/android/server/wm/OemForegroundInfoController.java b/services/core/java/com/android/server/wm/OemForegroundInfoController.java
+--- a/services/core/java/com/android/server/wm/OemForegroundInfoController.java
++++ b/services/core/java/com/android/server/wm/OemForegroundInfoController.java
+@@ -102,6 +102,9 @@
+         if (activity == null || activity.app == null || !activity.isAttached()
+                 || activity.app.getPid() <= 0
+                 || activity.mAtmService.getTransitionController().isTransientCollect(activity)) return;
++        if (activity.mAtmService.mOemCameraActivityScene != null) {
++            activity.mAtmService.mOemCameraActivityScene.onActivityChanged(activity.mActivityComponent);
++        }
+         final Task focused = activity.mAtmService.mRootWindowContainer
+                 .getTopDisplayFocusedRootTask();
+         final ActivityRecord multiWindow = focused != null

@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+# QTI Boot Control checks boot_a and boot_b when reporting the slot count.
+allow hal_bootctl block_device:dir r_dir_perms;
+allow hal_bootctl boot_block_device:blk_file getattr;

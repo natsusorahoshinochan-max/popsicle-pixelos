@@ -1,0 +1,19 @@
+--- a/app/src/main/java/org/lineageos/aperture/viewmodels/CameraViewModel.kt
++++ b/app/src/main/java/org/lineageos/aperture/viewmodels/CameraViewModel.kt
+@@ -1543,12 +1543,14 @@
+      * @param zoomRatio The zoom ratio to apply
+      */
+     fun smoothZoom(zoomRatio: Float) {
++        // An unbound camera has no zoom state. Do not retain the gesture lock
++        // when there is no animator whose completion can release it.
++        val zoomState = zoomState.value ?: return
++
+         val acquired = zoomGestureMutex.tryLock()
+         if (!acquired) {
+             return
+         }
+-
+-        val zoomState = zoomState.value ?: return
+ 
+         ValueAnimator.ofFloat(
+             zoomState.zoomRatio,

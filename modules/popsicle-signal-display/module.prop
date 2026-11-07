@@ -1,0 +1,6 @@
+id=popsicle_signal_display
+name=Popsicle stock cellular signal levels
+version=0.1
+versionCode=1
+author=Kanoe
+description=Stock display thresholds for GSM/WCDMA/TD-SCDMA/CDMA/EVDO/LTE/NR on PixelOS 20260930. Includes matching framework boot images. Disable and reboot to restore.

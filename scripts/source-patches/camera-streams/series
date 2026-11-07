@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+frameworks/av 06458fc8272e542a02812061f2f42f888b168e50 0001-xiaomi-advertised-output-dimensions.patch

@@ -1,0 +1,212 @@
+diff --git a/core/java/com/android/internal/display/OemRearDisplay.java b/core/java/com/android/internal/display/OemRearDisplay.java
+--- a/core/java/com/android/internal/display/OemRearDisplay.java
++++ b/core/java/com/android/internal/display/OemRearDisplay.java
+@@ -30,6 +30,15 @@
+         return !resources.getString(R.string.config_oemRearDisplayUniqueId).isEmpty();
+     }
+ 
++    /** Resolves a live display without assuming its logical ID. */
++    public static boolean isRearDisplay(Resources resources, Display display) {
++        if (display == null) {
++            return false;
++        }
++        DisplayInfo info = new DisplayInfo();
++        return display.getDisplayInfo(info) && isRearDisplay(resources, info);
++    }
++
+     public static boolean isRearDisplay(Resources resources, DisplayInfo info) {
+         return info != null && info.type == Display.TYPE_INTERNAL
+                 && info.displayId != Display.DEFAULT_DISPLAY && isConfigured(resources)
+diff --git a/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java b/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
+--- a/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
++++ b/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
+@@ -33,11 +33,15 @@
+ import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_DEVICE_DREAMING;
+ import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_DUAL_SHADE_ENABLED;
+ import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_FREEFORM_ACTIVE_IN_DESKTOP_MODE;
++import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_HOME_DISABLED;
+ import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_NAVIGATION_BAR_DISABLED;
+ import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_NOTIFICATION_PANEL_EXPANDED;
++import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_OVERVIEW_DISABLED;
++import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_SEARCH_DISABLED;
+ import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_STATUS_BAR_KEYGUARD_GOING_AWAY;
+ import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_STATUS_BAR_KEYGUARD_SHOWING;
+ import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_STATUS_BAR_KEYGUARD_SHOWING_OCCLUDED;
++import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_TOUCHPAD_GESTURES_DISABLED;
+ import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_VOICE_INTERACTION_WINDOW_SHOWING;
+ import static com.android.systemui.shared.system.QuickStepContract.SYSUI_STATE_WAKEFULNESS_TRANSITION;
+ import static com.android.systemui.shared.system.QuickStepContract.addInterface;
+@@ -84,6 +88,7 @@
+ 
+ import com.android.app.displaylib.PerDisplayRepository;
+ import com.android.internal.annotations.VisibleForTesting;
++import com.android.internal.display.OemRearDisplay;
+ import com.android.internal.app.AssistUtils;
+ import com.android.internal.app.IVoiceInteractionSessionListener;
+ import com.android.internal.logging.UiEventLogger;
+@@ -947,6 +952,14 @@
+     }
+ 
+     private void notifySystemUiStateFlags(@SystemUiStateFlags long flags, int displayId) {
++        if (OemRearDisplay.isRearDisplay(
++                mContext.getResources(), mDisplayRepository.getDisplay(displayId))) {
++            // The primary launcher does not own gestures on the OEM rear Home. Keep this
++            // eligibility in the launcher protocol; do not alter shared SysUI or OEM state.
++            flags |= SYSUI_STATE_NAVIGATION_BAR_DISABLED | SYSUI_STATE_HOME_DISABLED
++                    | SYSUI_STATE_OVERVIEW_DISABLED | SYSUI_STATE_SEARCH_DISABLED
++                    | SYSUI_STATE_TOUCHPAD_GESTURES_DISABLED;
++        }
+         if (SysUiState.DEBUG) {
+             Log.d(TAG_OPS, "Notifying sysui state change to launcher service: proxy="
+                     + mLauncherProxy + " display=" + displayId + " flags="
+diff --git a/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java b/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
+--- a/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
++++ b/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
+@@ -2746,7 +2746,7 @@
+         private final MyPowerOptionsAdapter mPowerOptionsAdapter;
+         @NonNull
+         private final MyRestartOptionsAdapter mRestartOptionsAdapter;
+-        @NonNull
++        @Nullable
+         private final StatusBarWindowController mStatusBarWindowController;
+         private final boolean mKeyguardShowing;
+         @NonNull
+@@ -2825,7 +2825,7 @@
+                             float distanceX,
+                             float distanceY) {
+                         if (distanceY < 0 && distanceY > distanceX
+-                                && e1 != null
++                                && e1 != null && mStatusBarWindowController != null
+                                 && e1.getY() <= mStatusBarWindowController.getStatusBarHeight()) {
+                             // Downwards scroll from top
+                             openShadeAndDismiss();
+@@ -2839,7 +2839,7 @@
+                             float velocityX,
+                             float velocityY) {
+                         if (velocityY > 0 && Math.abs(velocityY) > Math.abs(velocityX)
+-                                && e1 != null
++                                && e1 != null && mStatusBarWindowController != null
+                                 && e1.getY() <= mStatusBarWindowController.getStatusBarHeight()) {
+                             // Downwards fling from top
+                             openShadeAndDismiss();
+@@ -2856,7 +2856,7 @@
+                 @Assisted @NonNull MyOverflowAdapter overflowAdapter,
+                 @Assisted @NonNull MyPowerOptionsAdapter powerAdapter,
+                 @Assisted @NonNull MyRestartOptionsAdapter restartAdapter,
+-                @Assisted @NonNull StatusBarWindowController statusBarWindowController,
++                @Assisted @Nullable StatusBarWindowController statusBarWindowController,
+                 @Assisted boolean keyguardShowing,
+                 @Assisted("onRefreshCallback") @NonNull Runnable onRefreshCallback,
+                 @Assisted("rescheduleBurnInTimeout") @NonNull Runnable rescheduleBurnInTimeout,
+@@ -3366,7 +3366,7 @@
+                     @NonNull MyOverflowAdapter overflowAdapter,
+                     @NonNull MyPowerOptionsAdapter powerAdapter,
+                     @NonNull MyRestartOptionsAdapter restartAdapter,
+-                    @NonNull StatusBarWindowController statusBarWindowController,
++                    @Nullable StatusBarWindowController statusBarWindowController,
+                     boolean keyguardShowing,
+                     @Assisted("onRefreshCallback") @NonNull Runnable onRefreshCallback,
+                     @Assisted("rescheduleBurnInTimeout") @NonNull Runnable rescheduleBurnInTimeout);
+diff --git a/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/EdgeBackGestureHandler.java b/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/EdgeBackGestureHandler.java
+--- a/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/EdgeBackGestureHandler.java
++++ b/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/EdgeBackGestureHandler.java
+@@ -76,6 +76,7 @@
+ import androidx.annotation.DimenRes;
+ 
+ import com.android.internal.config.sysui.SystemUiDeviceConfigFlags;
++import com.android.internal.display.OemRearDisplay;
+ import com.android.internal.policy.GestureNavigationSettingsObserver;
+ import com.android.systemui.LauncherProxyService;
+ import com.android.systemui.contextualeducation.GestureType;
+@@ -690,6 +691,11 @@
+                             + displayId);
+                     return;
+                 }
++                if (OemRearDisplay.isRearDisplay(mContext.getResources(), display)) {
++                    // The OEM rear service owns its edge windows and back gesture protocol.
++                    removeAndDisposeDisplayResource(displayId);
++                    return;
++                }
+                 if (!mDesktopState.isDesktopModeSupportedOnDisplay(display)) {
+                     Log.w(TAG,
+                             "onDisplayAddSystemDecorations: desktop mode not supported on display"
+@@ -822,6 +828,9 @@
+ 
+                 // Registers input event receiver and adds a nav bar panel window
+                 for (Display display : mDisplayManager.getDisplays()) {
++                    if (OemRearDisplay.isRearDisplay(mContext.getResources(), display)) {
++                        continue;
++                    }
+                     mDisplayBackGestureHandlers.put(display.getDisplayId(),
+                             createDisplayBackGestureHandler(display));
+                 }
+diff --git a/packages/SystemUI/src/com/android/systemui/shade/data/repository/ShadeDisplaysRepository.kt b/packages/SystemUI/src/com/android/systemui/shade/data/repository/ShadeDisplaysRepository.kt
+--- a/packages/SystemUI/src/com/android/systemui/shade/data/repository/ShadeDisplaysRepository.kt
++++ b/packages/SystemUI/src/com/android/systemui/shade/data/repository/ShadeDisplaysRepository.kt
+@@ -16,8 +16,10 @@
+ 
+ package com.android.systemui.shade.data.repository
+ 
++import android.content.Context
+ import android.provider.Settings
+ import android.view.Display
++import com.android.internal.display.OemRearDisplay
+ import com.android.systemui.dagger.SysUISingleton
+ import com.android.systemui.dagger.qualifiers.Background
+ import com.android.systemui.display.data.repository.DisplayRepository
+@@ -82,6 +84,7 @@
+     @ShadeOnDefaultDisplayWhenLocked private val shadeOnDefaultDisplayWhenLocked: Boolean,
+     keyguardRepository: KeyguardRepository,
+     displayRepository: DisplayRepository,
++    context: Context,
+ ) : MutableShadeDisplaysRepository {
+ 
+     private val policy: StateFlow<ShadeDisplayPolicy> =
+@@ -114,6 +117,11 @@
+             when {
+                 isMirroring -> Display.DEFAULT_DISPLAY
+                 policyDisplayId !in availableIds -> Display.DEFAULT_DISPLAY
++                // All shade policies must leave the dedicated OEM rear panel to its own UI.
++                OemRearDisplay.isRearDisplay(
++                    context.resources,
++                    displayRepository.getDisplay(policyDisplayId),
++                ) -> Display.DEFAULT_DISPLAY
+                 else -> policyDisplayId
+             }
+         }
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/window/StatusBarWindowControllerStore.kt b/packages/SystemUI/src/com/android/systemui/statusbar/window/StatusBarWindowControllerStore.kt
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/window/StatusBarWindowControllerStore.kt
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/window/StatusBarWindowControllerStore.kt
+@@ -18,6 +18,7 @@
+ 
+ import android.view.WindowManager
+ import com.android.app.displaylib.PerDisplayRepository
++import com.android.internal.display.OemRearDisplay
+ import com.android.systemui.dagger.SysUISingleton
+ import com.android.systemui.dagger.qualifiers.Background
+ import com.android.systemui.display.dagger.SystemUIDisplaySubcomponent
+@@ -39,7 +40,7 @@
+     private val controllerFactory: StatusBarWindowController.Factory,
+     private val displayWindowPropertiesRepository: DisplayWindowPropertiesRepository,
+     private val perDisplaySubcomponentRepo: PerDisplayRepository<SystemUIDisplaySubcomponent>,
+-    displayRepository: DisplayRepository,
++    private val displayRepository: DisplayRepository,
+ ) :
+     StatusBarWindowControllerStore,
+     StatusBarPerDisplayStoreImpl<StatusBarWindowController>(
+@@ -54,6 +55,15 @@
+                 displayId = displayId,
+                 windowType = WindowManager.LayoutParams.TYPE_STATUS_BAR,
+             ) ?: return null
++        if (
++            OemRearDisplay.isRearDisplay(
++                statusBarDisplayContext.context.resources,
++                displayRepository.getDisplay(displayId),
++            )
++        ) {
++            // The OEM rear Home owns touch gestures across the whole panel.
++            return null
++        }
+         return controllerFactory.create(
+             statusBarDisplayContext.context,
+             statusBarDisplayContext.windowManager,

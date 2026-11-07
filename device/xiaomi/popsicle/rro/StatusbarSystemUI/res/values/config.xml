@@ -1,0 +1,5 @@
+<resources>
+<array name="config_roundedCornerTopDrawableArray"><item>@drawable/popsicle_main_corner</item><item>@drawable/popsicle_rear_corner</item></array>
+<array name="config_roundedCornerBottomDrawableArray"><item>@drawable/popsicle_main_corner</item><item>@drawable/popsicle_rear_corner</item></array>
+<dimen name="rounded_corner_content_padding">100px</dimen>
+</resources>

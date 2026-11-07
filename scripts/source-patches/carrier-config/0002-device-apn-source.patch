@@ -1,0 +1,30 @@
+--- a/Android.bp
++++ b/Android.bp
+@@ -11,10 +11,25 @@
+     cmd: "XMLLINT=$(location xmllint) $(location make-apns) $(in) > $(out)",
+ }
+ 
+-prebuilt_etc_xml {
++soong_config_module_type {
++    name: "popsicle_apns_xml",
++    module_type: "prebuilt_etc_xml",
++    config_namespace: "popsicle",
++    bool_variables: ["global_carrier_config"],
++    properties: ["src"],
++}
++
++popsicle_apns_xml {
+     name: "apns-conf.xml",
+     product_specific: true,
+-    src: ":apns-conf",
++    soong_config_variables: {
++        global_carrier_config: {
++            src: ":popsicle_carrier_apns_data",
++            conditions_default: {
++                src: ":apns-conf",
++            },
++        },
++    },
+     schema: ":apns-conf-schema",
+ }
+ 

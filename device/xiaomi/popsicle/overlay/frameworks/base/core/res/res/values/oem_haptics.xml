@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Original OS4.0.0.23 prebaked ABI. Actual effects still require HAL support. -->
+    <bool name="config_enableOemHapticEffects">true</bool>
+</resources>

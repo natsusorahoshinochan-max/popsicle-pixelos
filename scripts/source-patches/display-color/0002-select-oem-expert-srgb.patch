@@ -1,0 +1,39 @@
+--- a/services/core/java/com/android/server/display/color/ColorDisplayService.java
++++ b/services/core/java/com/android/server/display/color/ColorDisplayService.java
+@@ -769,15 +769,23 @@
+             return;
+         }
+         final int effect;
++        final int value;
++        final int cookie;
+         switch (mode) {
+             case COLOR_MODE_NATURAL:
+             case COLOR_MODE_BOOSTED:
+-                // OEM screen_optimize_mode=3: standard profile. AOSP owns the boost matrix.
+-                effect = 2;
++                // OEM expert gamut 3 selects sRGB and clears the previous vendor LUT.
++                // SurfaceFlinger selects its matching intent for the main SDR sRGB output.
++                // AOSP continues to own the Natural/Boosted saturation matrix.
++                effect = 26;
++                value = 3;
++                cookie = 0;
+                 break;
+             case COLOR_MODE_SATURATED:
+                 // OEM screen_optimize_mode=2: expanded gamut profile.
+                 effect = 1;
++                value = 2;
++                cookie = 255;
+                 break;
+             default:
+                 return;
+@@ -794,8 +802,8 @@
+             data.writeInterfaceToken(descriptor);
+             data.writeInt(0); // Main HAL display index; never apply this profile to the rear panel.
+             data.writeInt(effect);
+-            data.writeInt(2); // Neutral OEM color temperature.
+-            data.writeInt(255); // Standard profile cookie from the matching OEM framework.
++            data.writeInt(value);
++            data.writeInt(cookie);
+             if (!service.transact(7, data, reply, 0)) {
+                 Slog.w(TAG, "Popsicle display color HAL rejected setFeature");
+                 return;

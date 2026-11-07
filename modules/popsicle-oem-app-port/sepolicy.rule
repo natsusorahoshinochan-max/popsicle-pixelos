@@ -1,0 +1,4 @@
+# Exact equivalent of the ROM foreground service policy. No default service/property grant.
+type oem_foreground_service { system_server_service service_manager_type }
+allow system_server oem_foreground_service service_manager { add find }
+allow { platform_app priv_app system_app } oem_foreground_service service_manager find

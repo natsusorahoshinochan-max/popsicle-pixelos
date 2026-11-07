@@ -1,0 +1,3 @@
+# Fixed PixelOS ROM production patch order.
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 0001-systemui-retained-scroll.patch
+packages/modules/Bluetooth 4f36f54dd8684390f930deb5efada0736c998061 0002-bluetooth-audio-context.patch

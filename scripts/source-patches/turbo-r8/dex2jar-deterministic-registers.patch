@@ -1,0 +1,21 @@
+--- a/dex-ir/src/main/java/com/googlecode/dex2jar/ir/ts/Ir2JRegAssignTransformer.java
++++ b/dex-ir/src/main/java/com/googlecode/dex2jar/ir/ts/Ir2JRegAssignTransformer.java
+@@ -178,6 +178,18 @@
+         if (method.locals.size() == 0) {
+             return;
+         }
++        // Stable statement order, rather than an upstream identity-hash set order,
++        // must break otherwise equal graph-coloring priorities. Keep all locals.
++        LinkedHashSet<Local> ordered = new LinkedHashSet<>();
++        Cfg.travel(method.stmts, new Cfg.TravelCallBack() {
++            public Value onUse(Local value) { ordered.add(value); return value; }
++            public Value onAssign(Local value, com.googlecode.dex2jar.ir.stmt.AssignStmt stmt) {
++                ordered.add(value); return value;
++            }
++        }, true);
++        ordered.addAll(method.locals);
++        method.locals.clear();
++        method.locals.addAll(ordered);
+         SimpleLiveAnalyze sa = new SimpleLiveAnalyze(method, true);
+         sa.analyze();
+ 

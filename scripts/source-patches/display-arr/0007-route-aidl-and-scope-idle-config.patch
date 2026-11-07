@@ -1,0 +1,23 @@
+--- a/services/core/jni/com_android_server_display_DisplayControl.cpp
++++ b/services/core/jni/com_android_server_display_DisplayControl.cpp
+@@ -165,7 +165,7 @@
+ static jintArray nativeGetArrDisplayModeIds(JNIEnv* env, jclass, jlong displayId) {
+     std::vector<int32_t> modeIds;
+     const auto service = interface_cast<gui::ISurfaceComposer>(
+-            defaultServiceManager()->checkService(String16("SurfaceFlinger")));
++            defaultServiceManager()->checkService(String16("SurfaceFlingerAIDL")));
+     if (service == nullptr || !service->getArrDisplayModeIds(displayId, &modeIds).isOk()) {
+         modeIds.clear();
+     }
+--- a/services/core/java/com/android/server/display/LocalDisplayAdapter.java
++++ b/services/core/java/com/android/server/display/LocalDisplayAdapter.java
+@@ -1295,7 +1295,8 @@
+                             specs.allowGroupSwitching,
+                             specs.primary,
+                             specs.appRequest,
+-                            specs.mIdleScreenRefreshRateConfig,
++                            getDisplayDeviceConfig().getIdleScreenRefreshRateTimeoutLuxThresholdPoint()
++                                    .isEmpty() ? null : specs.mIdleScreenRefreshRateConfig,
+                             specs.workDurationsData);
+         }
+ 

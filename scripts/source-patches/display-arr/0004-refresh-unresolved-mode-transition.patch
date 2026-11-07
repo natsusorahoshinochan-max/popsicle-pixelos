@@ -1,0 +1,84 @@
+--- a/services/core/java/com/android/server/display/LocalDisplayAdapter.java
++++ b/services/core/java/com/android/server/display/LocalDisplayAdapter.java
+@@ -262,6 +262,16 @@
+         private int mActiveColorMode;
+         private boolean mHasArrSupport;
+         private int mArrSupportSfModeId = INVALID_MODE_ID;
++        private int mArrSupportRefreshAttempts;
++        private final Runnable mRefreshArrSupport = this::refreshArrSupport;
++
++        private void refreshArrSupport() {
++            synchronized (getSyncRoot()) {
++                if (mDevices.get(mPhysicalDisplayId) == this && refreshArrSupportLocked()) {
++                    updateDeviceInfoLocked();
++                }
++            }
++        }
+         private FrameRateCategoryRate mFrameRateCategoryRate;
+         private float[] mSupportedRefreshRates = new float[0];
+         private Display.HdrCapabilities mHdrCapabilities;
+@@ -330,6 +340,8 @@
+             changed |= updateGameContentTypeSupport(dynamicInfo.gameContentTypeSupported);
+             changed |= updateHasArrSupportLocked(dynamicInfo.hasArrSupport);
+             mArrSupportSfModeId = dynamicInfo.activeDisplayModeId;
++            getHandler().removeCallbacks(mRefreshArrSupport);
++            mArrSupportRefreshAttempts = 0;
+             changed |= updateFrameRateCategoryRatesLocked(dynamicInfo.frameRateCategoryRate);
+             changed |= updateSupportedRefreshatesLocked(dynamicInfo.supportedRefreshRates);
+ 
+@@ -1293,25 +1305,42 @@
+                 long appVsyncOffsetNanos, long presentationDeadlineNanos,
+                 DisplayEventReceiver.FrameRateOverride[] overrides,
+                 float[] supportedRefreshRates) {
++            if (mActiveSfDisplayMode.id != sfModeId) {
++                getHandler().removeCallbacks(mRefreshArrSupport);
++                mArrSupportRefreshAttempts = 0;
++            }
+             boolean changed = updateActiveModeAndFrameOverrideChangedLocked(sfModeId,
+                     renderFrameRate, appVsyncOffsetNanos,
+                     presentationDeadlineNanos, overrides, supportedRefreshRates);
+-            if (mArrSupportSfModeId != sfModeId) {
+-                // A mode event can precede SF's active snapshot. Retry on its completion event,
+-                // even if the mode/rate payload is unchanged. Once resolved, render-rate-only
+-                // events within this configuration need no binder query.
+-                SurfaceControl.DynamicDisplayInfo dynamicInfo =
+-                        mSurfaceControlProxy.getDynamicDisplayInfo(mPhysicalDisplayId);
+-                if (dynamicInfo != null && dynamicInfo.activeDisplayModeId == sfModeId) {
+-                    mArrSupportSfModeId = sfModeId;
+-                    changed |= updateHasArrSupportLocked(dynamicInfo.hasArrSupport);
+-                    changed |= updateFrameRateCategoryRatesLocked(
+-                            dynamicInfo.frameRateCategoryRate);
+-                }
+-            }
++            changed |= refreshArrSupportLocked();
+             if (changed) {
+                 updateDeviceInfoLocked();
+             }
++        }
++
++        private boolean refreshArrSupportLocked() {
++            if (mArrSupportSfModeId == mActiveSfDisplayMode.id) {
++                return false;
++            }
++            SurfaceControl.DynamicDisplayInfo dynamicInfo =
++                    mSurfaceControlProxy.getDynamicDisplayInfo(mPhysicalDisplayId);
++            getHandler().removeCallbacks(mRefreshArrSupport);
++            if (dynamicInfo != null
++                    && dynamicInfo.activeDisplayModeId == mActiveSfDisplayMode.id) {
++                mArrSupportSfModeId = dynamicInfo.activeDisplayModeId;
++                mArrSupportRefreshAttempts = 0;
++                boolean changed = updateHasArrSupportLocked(dynamicInfo.hasArrSupport);
++                return updateFrameRateCategoryRatesLocked(dynamicInfo.frameRateCategoryRate)
++                        | changed;
++            }
++            // The mode event may precede the native snapshot without a completion event.
++            // Poll only this unresolved transition, for at most one second.
++            if (++mArrSupportRefreshAttempts <= 20) {
++                getHandler().postDelayed(mRefreshArrSupport, 50);
++            } else {
++                Slog.w(TAG, "Timed out refreshing ARR support for display " + mPhysicalDisplayId);
++            }
++            return false;
+         }
+ 
+         public void onHdcpLevelsChangedLocked(int connectedLevel, int maxLevel) {

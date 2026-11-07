@@ -1,0 +1,4 @@
+# Fixed PixelOS ROM production patch order.
+build/soong 321ecf4fc740482603b917c5de30a0e27e97595e ims-dex-libraries/0001-dex-import-runtime-library.patch
+build/soong 321ecf4fc740482603b917c5de30a0e27e97595e oem-vendor-providers/0001-vendor-prebuilt-inputs.patch
+build/soong 321ecf4fc740482603b917c5de30a0e27e97595e ../build-support/java-highmem-pool.patch

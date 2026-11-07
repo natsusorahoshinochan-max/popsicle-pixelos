@@ -1,0 +1,59 @@
+diff --git a/services/core/java/com/android/server/camera/CameraActivitySceneStub.java b/services/core/java/com/android/server/camera/CameraActivitySceneStub.java
+--- a/services/core/java/com/android/server/camera/CameraActivitySceneStub.java
++++ b/services/core/java/com/android/server/camera/CameraActivitySceneStub.java
+@@ -63,14 +63,14 @@
+             sInstance.mContext = context;
+             sInstance.mRearUniqueId = context.getString(R.string.config_oemRearDisplayUniqueId);
+             // Queue initialization before publishing the handler or accepting WM snapshots.
+-            handler.post(sInstance::bootOnHandler);
++            sInstance.postTask(handler, "boot", sInstance::bootOnHandler);
+             sInstance.mHandler = handler;
+         }
+         return sInstance;
+     }
+ 
+     public void initSystemBooted() {
+-        handler().post(this::bootOnHandler);
++        postTask(handler(), "boot", this::bootOnHandler);
+     }
+ 
+     private void bootOnHandler() {
+@@ -91,6 +91,18 @@
+         }
+     }
+ 
++    // An optional vendor scene failure must not terminate the shared system-server thread.
++    // Preserve the failed operation (including mBooted=false) and report its real exception.
++    private void postTask(Handler handler, String operation, Runnable task) {
++        handler.post(() -> {
++            try {
++                task.run();
++            } catch (RuntimeException e) {
++                Slog.e(TAG, "Camera scene " + operation + " failed", e);
++            }
++        });
++    }
++
+     private Handler handler() {
+         Handler handler = mHandler;
+         if (handler == null) throw new IllegalStateException("Camera scene service is not initialized");
+@@ -100,15 +112,16 @@
+     /** Snapshot supplied under the WM lock; no ActivityRecord retained or property I/O under it. */
+     public void onActivityStateChanged(String packageName, String activityName, int state,
+             boolean isRearDisplay) {
+-        handler().post(() -> mPolicy.onActivityState(packageName, activityName, state, isRearDisplay));
++        postTask(handler(), "activity state",
++                () -> mPolicy.onActivityState(packageName, activityName, state, isRearDisplay));
+     }
+ 
+     /** Snapshot of the focused/resumed component, distinct from foreground package changes. */
+     public void onActivityChanged(ComponentName component) {
+-        handler().post(() -> {
++        postTask(handler(), "activity component", () -> {
+             if (component != null && !component.equals(mLastComponent)) {
++                mPolicy.onActivityChanged(component.toString());
+                 mLastComponent = component;
+-                mPolicy.onActivityChanged(component.toString());
+             }
+         });
+     }

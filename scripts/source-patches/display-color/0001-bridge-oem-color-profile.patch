@@ -1,0 +1,90 @@
+--- a/services/core/java/com/android/server/display/color/ColorDisplayService.java
++++ b/services/core/java/com/android/server/display/color/ColorDisplayService.java
+@@ -60,9 +60,13 @@
+ import android.opengl.Matrix;
+ import android.os.Binder;
+ import android.os.Handler;
++import android.os.IBinder;
+ import android.os.Looper;
+ import android.os.Message;
++import android.os.Parcel;
+ import android.os.ParcelFileDescriptor;
++import android.os.RemoteException;
++import android.os.ServiceManager;
+ import android.os.SystemProperties;
+ import android.os.UserHandle;
+ import android.provider.Settings.Secure;
+@@ -233,6 +237,15 @@
+ 
+     @Override
+     public void onBootPhase(int phase) {
++        if (phase == PHASE_BOOT_COMPLETED
++                && "popsicle".equals(SystemProperties.get("ro.product.device"))) {
++            getContext().registerReceiver(new BroadcastReceiver() {
++                @Override
++                public void onReceive(Context context, Intent intent) {
++                    applyPopsicleDisplayColor(getColorModeInternal());
++                }
++            }, new IntentFilter(Intent.ACTION_SCREEN_ON), null, mHandler);
++        }
+         if (phase >= PHASE_BOOT_COMPLETED) {
+             mBootCompleted = true;
+ 
+@@ -743,8 +756,57 @@
+                 mReduceBrightColorsTintController.getMatrix(),
+                 getCompositionColorSpace(mode));
+ 
++        applyPopsicleDisplayColor(mode);
++
+         if (mDisplayWhiteBalanceTintController.isAvailable(getContext())) {
+             updateDisplayWhiteBalanceStatus();
++        }
++    }
++
++    /** Apply the matching OS4.0.0.23 main-panel effect alongside AOSP color management. */
++    private static void applyPopsicleDisplayColor(int mode) {
++        if (!"popsicle".equals(SystemProperties.get("ro.product.device"))) {
++            return;
++        }
++        final int effect;
++        switch (mode) {
++            case COLOR_MODE_NATURAL:
++            case COLOR_MODE_BOOSTED:
++                // OEM screen_optimize_mode=3: standard profile. AOSP owns the boost matrix.
++                effect = 2;
++                break;
++            case COLOR_MODE_SATURATED:
++                // OEM screen_optimize_mode=2: expanded gamut profile.
++                effect = 1;
++                break;
++            default:
++                return;
++        }
++        final String descriptor = "vendor.xiaomi.hardware.displayfeature_aidl.IDisplayFeature";
++        final IBinder service = ServiceManager.checkService(descriptor + "/default");
++        if (service == null) {
++            Slog.w(TAG, "Popsicle display color HAL is unavailable");
++            return;
++        }
++        final Parcel data = Parcel.obtain();
++        final Parcel reply = Parcel.obtain();
++        try {
++            data.writeInterfaceToken(descriptor);
++            data.writeInt(0); // Main HAL display index; never apply this profile to the rear panel.
++            data.writeInt(effect);
++            data.writeInt(2); // Neutral OEM color temperature.
++            data.writeInt(255); // Standard profile cookie from the matching OEM framework.
++            if (!service.transact(7, data, reply, 0)) {
++                Slog.w(TAG, "Popsicle display color HAL rejected setFeature");
++                return;
++            }
++            reply.readException();
++            Slog.i(TAG, "Popsicle main display color mode=" + mode + " effect=" + effect);
++        } catch (RemoteException | RuntimeException e) {
++            Slog.e(TAG, "Failed to apply Popsicle display color", e);
++        } finally {
++            reply.recycle();
++            data.recycle();
+         }
+     }
+ 

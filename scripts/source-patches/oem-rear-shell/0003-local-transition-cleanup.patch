@@ -1,0 +1,122 @@
+--- a/packages/SystemUI/src/com/android/systemui/recents/OemRearShellTransitions.java
++++ b/packages/SystemUI/src/com/android/systemui/recents/OemRearShellTransitions.java
+@@ -22,11 +22,11 @@
+ import android.os.Parcel;
+ import android.os.RemoteException;
+ import android.util.ArrayMap;
+-import android.util.Log;
+ import android.window.RemoteTransition;
+ import android.window.TransitionFilter;
+ 
+ import java.util.Objects;
++import java.util.function.Consumer;
+ 
+ /**
+  * Translates the official rear launcher's Shell registration protocol.
+@@ -45,13 +45,16 @@
+ 
+     private volatile IBinder mDelegate;
+     private final int mCallerUid;
++    private final Consumer<RemoteTransition> mUnregisterLocal;
+     private final ArrayMap<IBinder, RemoteTransition> mRegistrations = new ArrayMap<>();
+     private volatile boolean mActive = true;
+     private volatile boolean mSuspended;
+ 
+-    public OemRearShellTransitions(IBinder delegate, int callerUid) {
++    public OemRearShellTransitions(IBinder delegate, int callerUid,
++            Consumer<RemoteTransition> unregisterLocal) {
+         mDelegate = Objects.requireNonNull(delegate);
+         mCallerUid = callerUid;
++        mUnregisterLocal = Objects.requireNonNull(unregisterLocal);
+         // Do not expose a local interface with the platform's different Java method signatures.
+         attachInterface(null, DESCRIPTOR);
+     }
+@@ -156,14 +159,9 @@
+             mRegistrations.clear();
+         }
+         for (int i = 0; i < registrations.size(); i++) {
+-            try {
+-                if (!forwardRemote(UNREGISTER_REMOTE, registrations.valueAt(i), null,
+-                        IBinder.FLAG_ONEWAY)) {
+-                    Log.w("OemRearShellTransitions", "Shell rejected animation cleanup");
+-                }
+-            } catch (RemoteException e) {
+-                Log.w("OemRearShellTransitions", "Failed to unregister rear animation", e);
+-            }
++            // This owner callback runs in SystemUI, not an incoming Binder transaction.
++            // Use Shell's local API for only this connection's accepted registrations.
++            mUnregisterLocal.accept(registrations.valueAt(i));
+         }
+     }
+ }
+--- a/packages/SystemUI/src/com/android/systemui/recents/OemRearLauncherConnection.java
++++ b/packages/SystemUI/src/com/android/systemui/recents/OemRearLauncherConnection.java
+@@ -36,8 +36,11 @@
+ import android.util.Log;
+ import android.view.Display;
+ import android.view.DisplayInfo;
++import android.window.RemoteTransition;
+ 
+ import java.io.PrintWriter;
++import java.util.Objects;
++import java.util.function.Consumer;
+ 
+ /** Main-thread owner of the official rear launcher's independent service connection. */
+ public final class OemRearLauncherConnection {
+@@ -51,6 +54,7 @@
+     private static final long BIND_TIMEOUT_MS = 10000;
+ 
+     private final Context mContext;
++    private final Consumer<RemoteTransition> mUnregisterLocal;
+     private final Handler mHandler;
+     private final DisplayManager mDisplays;
+     private final String mDisplayUniqueId;
+@@ -64,8 +68,9 @@
+     private OemRearShellTransitions mTransitionAccess;
+ 
+     public OemRearLauncherConnection(Context context, Handler handler, int userId,
+-            String displayUniqueId) {
++            String displayUniqueId, Consumer<RemoteTransition> unregisterLocal) {
+         mContext = context;
++        mUnregisterLocal = Objects.requireNonNull(unregisterLocal);
+         mHandler = handler;
+         mUserId = userId;
+         mDisplayUniqueId = displayUniqueId;
+@@ -183,7 +188,8 @@
+         if (mConnection != connection || mRecentTasks == null || mTransitions == null) return;
+         if (mRecentAccess == null) {
+             mRecentAccess = new OemRearRecentTasks(mRecentTasks, connection.uid);
+-            mTransitionAccess = new OemRearShellTransitions(mTransitions, connection.uid);
++            mTransitionAccess = new OemRearShellTransitions(
++                    mTransitions, connection.uid, mUnregisterLocal);
+         } else {
+             // The APK retains its registration flag across onInitialize. Shell facade replacement
+             // does not remove its remote filters, so retain both registrations and wrapper identity.
+--- a/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
++++ b/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
+@@ -130,6 +130,7 @@
+ import com.android.systemui.statusbar.policy.CallbackController;
+ import com.android.systemui.unfold.progress.UnfoldTransitionProgressForwarder;
+ import com.android.systemui.user.domain.interactor.HeadlessSystemUserMode;
++import com.android.wm.shell.shared.ShellTransitions;
+ import com.android.wm.shell.back.BackAnimation;
+ import com.android.wm.shell.shared.desktopmode.DesktopState;
+ import com.android.wm.shell.sysui.ShellInterface;
+@@ -733,6 +734,7 @@
+             @Main Executor mainExecutor,
+             CommandQueue commandQueue,
+             ShellInterface shellInterface,
++            ShellTransitions shellTransitions,
+             Lazy<NavigationBarController> navBarControllerLazy,
+             Lazy<ShadeViewController> shadeViewControllerLazy,
+             ScreenPinningRequest screenPinningRequest,
+@@ -782,7 +784,8 @@
+         mHandler = new Handler();
+         mRearLauncherConnection = new OemRearLauncherConnection(context, mHandler,
+                 userTracker.getUserId(), mIsSystemOrVisibleBgUser ? context.getString(
+-                        com.android.internal.R.string.config_oemRearDisplayUniqueId) : "");
++                        com.android.internal.R.string.config_oemRearDisplayUniqueId) : "",
++                shellTransitions::unregisterRemote);
+         mNavBarControllerLazy = navBarControllerLazy;
+         mScreenPinningRequest = screenPinningRequest;
+         mStatusBarWinController = statusBarWinController;

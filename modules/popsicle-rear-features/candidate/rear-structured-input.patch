@@ -1,0 +1,11 @@
+--- a/prebuilt/oem-rear/Android.bp
++++ b/prebuilt/oem-rear/Android.bp
+@@ -12,7 +12,7 @@
+ 
+ android_app_import {
+     name: "PopsicleSubscreenCenter",
+-    apk: "subscreencenter-gestures.apk",
++    apk: "subscreencenter-structured.apk",
+     certificate: "platform",
+     system_ext_specific: true,
+     licenses: ["popsicle_oem_rear_proprietary"],

@@ -1,0 +1,37 @@
+diff --git a/services/core/java/com/android/server/wm/DisplayContent.java b/services/core/java/com/android/server/wm/DisplayContent.java
+--- a/services/core/java/com/android/server/wm/DisplayContent.java
++++ b/services/core/java/com/android/server/wm/DisplayContent.java
+@@ -7132,7 +7132,10 @@
+      * @return whether keyguard should always be unlocked for this display
+      */
+     boolean isKeyguardAlwaysUnlocked() {
+-        return (mDisplayInfo.flags & Display.FLAG_ALWAYS_UNLOCKED) != 0;
++        // The independent OEM rear panel keeps its own interactive home while the phone locks.
++        return (mDisplayInfo.flags & Display.FLAG_ALWAYS_UNLOCKED) != 0
++                || com.android.internal.display.OemRearDisplay.isRearDisplay(
++                        mWmService.mContext.getResources(), mDisplayInfo);
+     }
+ 
+     /**
+diff --git a/packages/SystemUI/src/com/android/keyguard/KeyguardDisplayManager.java b/packages/SystemUI/src/com/android/keyguard/KeyguardDisplayManager.java
+--- a/packages/SystemUI/src/com/android/keyguard/KeyguardDisplayManager.java
++++ b/packages/SystemUI/src/com/android/keyguard/KeyguardDisplayManager.java
+@@ -35,6 +35,7 @@
+ 
+ import androidx.annotation.Nullable;
+ 
++import com.android.internal.display.OemRearDisplay;
+ import com.android.systemui.dagger.SysUISingleton;
+ import com.android.systemui.dagger.qualifiers.Application;
+ import com.android.systemui.dagger.qualifiers.Main;
+@@ -166,6 +167,10 @@
+             return false;
+         }
+         display.getDisplayInfo(mTmpDisplayInfo);
++        if (OemRearDisplay.isRearDisplay(mContext.getResources(), mTmpDisplayInfo)) {
++            // WMS leaves this independent panel unlocked for the original interactive rear home.
++            return false;
++        }
+         if ((mTmpDisplayInfo.flags & Display.FLAG_PRIVATE) != 0) {
+             Log.i(TAG, "Do not show KeyguardPresentation on a private display");
+             return false;

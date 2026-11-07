@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <!-- Public logical camera 0 advertises 0.7x..10x and physical cameras 2/3/4.
+         These are zoom requests, not forced physical-camera selections. Keep
+         CameraX capability filtering and the HAL's lens-selection policy.
+         Aperture supplies the 1x entry itself. -->
+    <string-array name="config_logicalZoomRatios">
+        <item>0</item> <item>0.7</item> <item>0.7</item>
+        <item>0</item> <item>2.0</item> <item>2.0</item>
+        <item>0</item> <item>5.0</item> <item>5.0</item>
+        <item>0</item> <item>10.0</item> <item>10.0</item>
+    </string-array>
+</resources>

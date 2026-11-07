@@ -1,0 +1,106 @@
+--- a/services/core/java/com/android/server/display/DisplayManagerService.java
++++ b/services/core/java/com/android/server/display/DisplayManagerService.java
+@@ -167,6 +167,7 @@
+ import android.util.IntArray;
+ import android.util.MathUtils;
+ import android.util.Pair;
++import android.util.Log;
+ import android.util.Slog;
+ import android.util.SparseArray;
+ import android.util.SparseIntArray;
+@@ -6187,6 +6188,11 @@
+         @Override // Binder call
+         public void setTemporaryAutoBrightnessAdjustment(float adjustment) {
+             setTemporaryAutoBrightnessAdjustment_enforcePermission();
++            if (Log.isLoggable("BrightnessRampTrace", Log.DEBUG)) {
++                Slog.d("BrightnessRampTrace", "temporary-call uid=" + Binder.getCallingUid()
++                        + " pid=" + Binder.getCallingPid() + " adjustment=" + adjustment
++                        + " uptime=" + SystemClock.uptimeMillis());
++            }
+             final long token = Binder.clearCallingIdentity();
+             try {
+                 synchronized (mSyncRoot) {
+--- a/services/core/java/com/android/server/display/DisplayPowerController.java
++++ b/services/core/java/com/android/server/display/DisplayPowerController.java
+@@ -71,6 +71,7 @@
+ import android.util.MathUtils;
+ import android.util.MutableFloat;
+ import android.util.MutableInt;
++import android.util.Log;
+ import android.util.Slog;
+ import android.util.SparseArray;
+ import android.view.Display;
+@@ -1564,6 +1565,13 @@
+                     // but this requires display support and would need an entry in the
+                     // display configuration. For now just do the fast animation
+                     slowChange = false;
++                }
++                if (Log.isLoggable("BrightnessRampTrace", Log.DEBUG)) {
++                    Slog.d("BrightnessRampTrace", "decision display=" + mDisplayId
++                            + " temporary=" + brightnessIsTemporary + " initial=" + initialRampSkip
++                            + " buckets=" + hasBrightnessBuckets
++                            + " visible=" + isDisplayContentVisible + " slow=" + slowChange
++                            + " reason=" + mBrightnessReasonTemp);
+                 }
+                 if (skipAnimation) {
+                     animateScreenBrightness(animateValue, sdrAnimateValue,
+@@ -2172,6 +2180,12 @@
+ 
+     private void animateScreenBrightness(float target, float sdrTarget, float rate,
+             boolean ignoreAnimationLimits) {
++        if (Log.isLoggable("BrightnessRampTrace", Log.DEBUG)) {
++            Slog.d("BrightnessRampTrace", "animate display=" + mDisplayId
++                    + " current=" + mPowerState.getScreenBrightness() + " target=" + target
++                    + " sdrTarget=" + sdrTarget + " rate=" + rate
++                    + " uptime=" + SystemClock.uptimeMillis());
++        }
+         if (DEBUG) {
+             Slog.d(mTag, "Animating brightness: target=" + target + ", sdrTarget=" + sdrTarget
+                     + ", rate=" + rate);
+@@ -3009,6 +3023,9 @@
+ 
+         @Override
+         public void onChange(boolean selfChange, Uri uri) {
++            if (Log.isLoggable("BrightnessRampTrace", Log.DEBUG)) {
++                Slog.d("BrightnessRampTrace", "setting display=" + mDisplayId + " uri=" + uri);
++            }
+             if (uri.equals(Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS_MODE))) {
+                 mHandler.postAtTime(() -> {
+                     handleBrightnessModeChange();
+--- a/services/core/java/com/android/server/display/brightness/strategy/AutomaticBrightnessStrategy.java
++++ b/services/core/java/com/android/server/display/brightness/strategy/AutomaticBrightnessStrategy.java
+@@ -28,6 +28,8 @@
+ import android.os.PowerManager;
+ import android.os.UserHandle;
+ import android.provider.Settings;
++import android.util.Log;
++import android.util.Slog;
+ import android.view.Display;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+@@ -254,6 +256,13 @@
+         if (Float.isNaN(mPendingAutoBrightnessAdjustment)) {
+             return false;
+         }
++        if (Log.isLoggable("BrightnessRampTrace", Log.DEBUG)) {
++            Slog.d("BrightnessRampTrace", "pending display=" + mDisplayId
++                    + " current=" + mAutoBrightnessAdjustment
++                    + " pending=" + mPendingAutoBrightnessAdjustment
++                    + " temporary=" + mTemporaryAutoBrightnessAdjustment
++                    + " clear=" + (mAutoBrightnessAdjustment != mPendingAutoBrightnessAdjustment));
++        }
+         if (mAutoBrightnessAdjustment == mPendingAutoBrightnessAdjustment) {
+             mPendingAutoBrightnessAdjustment = Float.NaN;
+             return false;
+@@ -318,6 +327,11 @@
+      * Sets the temporary auto-brightness adjustments
+      */
+     public void setTemporaryAutoBrightnessAdjustment(float temporaryAutoBrightnessAdjustment) {
++        if (Log.isLoggable("BrightnessRampTrace", Log.DEBUG)) {
++            Slog.d("BrightnessRampTrace", "temporary-set display=" + mDisplayId
++                    + " old=" + mTemporaryAutoBrightnessAdjustment
++                    + " new=" + temporaryAutoBrightnessAdjustment);
++        }
+         mTemporaryAutoBrightnessAdjustment = temporaryAutoBrightnessAdjustment;
+     }
+ 

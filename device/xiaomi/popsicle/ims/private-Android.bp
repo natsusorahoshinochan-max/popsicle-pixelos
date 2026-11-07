@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: Apache-2.0
+// Prepared under vendor/xiaomi/popsicle-private/prebuilt/ims only.
+package { default_applicable_licenses: ["popsicle_ims_notice"], }
+license {
+    name: "popsicle_ims_notice",
+    license_kinds: ["legacy_notice"],
+    license_text: ["NOTICE"],
+}
+android_app_import {
+    name: "PopsicleIms",
+    apk: "ims.apk",
+    filename: "ims.apk",
+    privileged: true,
+    system_ext_specific: true,
+    certificate: "platform",
+    uses_libs: ["qti-telephony-utils", "ims-ext-common"],
+    required: ["popsicle_imsmedia_jni", "popsicle_SurfaceUtil_jni"],
+}
+dex_import {
+    name: "qti-telephony-utils",
+    provides_uses_lib: "qti-telephony-utils",
+    prefer: true,
+    jars: ["qti-telephony-utils.jar"],
+    system_ext_specific: true,
+}
+dex_import {
+    name: "ims-ext-common",
+    provides_uses_lib: "ims-ext-common",
+    prefer: true,
+    jars: ["ims-ext-common.jar"],
+    product_specific: true,
+}
+// Classpath-only OEM audio controller; never install QtiTelephony as an app.
+dex_import {
+    name: "popsicle-qti-audio-controller",
+    jars: ["QtiTelephony.apk"],
+    system_ext_specific: true,
+}
+
+
+prebuilt_etc {
+    name: "popsicle-ims-privapp-permissions",
+    src: "privapp-permissions-popsicle-ims.xml",
+    filename_from_src: true,
+    sub_dir: "permissions",
+    system_ext_specific: true,
+}
+
+cc_prebuilt_library_shared {
+    name: "popsicle_imsmedia_jni",
+    stem: "libimsmedia_jni",
+    srcs: ["libimsmedia_jni.so"],
+    compile_multilib: "64",
+    system_ext_specific: true,
+    strip: { none: true },
+    stl: "none",
+    shared_libs: ["libnativehelper", "libcutils", "libutils", "libgui",
+                  "libbinder", "liblog", "libandroid", "libc++"],
+}
+cc_prebuilt_library_shared {
+    name: "popsicle_SurfaceUtil_jni",
+    stem: "libSurfaceUtil_jni",
+    srcs: ["libSurfaceUtil_jni.so"],
+    compile_multilib: "64",
+    system_ext_specific: true,
+    strip: { none: true },
+    stl: "none",
+    shared_libs: ["libbinder", "libgui", "libnativehelper", "libutils", "libc++"],
+}

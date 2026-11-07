@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 pixelos-network-traffic-user.patch

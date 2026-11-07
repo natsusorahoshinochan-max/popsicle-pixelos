@@ -1,0 +1,110 @@
+diff --git a/media/libstagefright/MediaMuxer.cpp b/media/libstagefright/MediaMuxer.cpp
+--- a/media/libstagefright/MediaMuxer.cpp
++++ b/media/libstagefright/MediaMuxer.cpp
+@@ -107,6 +107,44 @@
+     mFormatList.clear();
+ }
+ 
++// The QTI encoder can explicitly negotiate length-prefixed HEVC output. The
++// stagefright writer accepts Annex-B input and builds its own MP4 NAL lengths.
++static bool hasLengthPrefixedHevc(const sp<AMessage>& format) {
++    AString mime;
++    int32_t lengthSize = 0;
++    return format->findString("mime", &mime) && mime == MEDIA_MIMETYPE_VIDEO_HEVC
++            && format->findInt32("vendor.qti-ext-enc-nal-length-bs.num-bytes", &lengthSize)
++            && lengthSize == 4;
++}
++
++static status_t hevcToAnnexB(const sp<ABuffer>& input, sp<ABuffer>* output) {
++    const uint8_t* data = input->data();
++    const size_t size = input->size();
++    if (size == 0 || data == nullptr) return BAD_VALUE;
++    // Validate the complete access unit before allocating or modifying anything.
++    for (size_t offset = 0; offset < size;) {
++        if (size - offset < 4) return BAD_VALUE;
++        const uint32_t length = (uint32_t(data[offset]) << 24)
++                | (uint32_t(data[offset + 1]) << 16)
++                | (uint32_t(data[offset + 2]) << 8) | data[offset + 3];
++        offset += 4;
++        if (length < 2 || length > size - offset) return BAD_VALUE;
++        offset += length;
++    }
++    sp<ABuffer> converted = new ABuffer(size);
++    if (converted->data() == nullptr) return NO_MEMORY;
++    memcpy(converted->data(), data, size);
++    for (size_t offset = 0; offset < size;) {
++        const uint32_t length = (uint32_t(data[offset]) << 24)
++                | (uint32_t(data[offset + 1]) << 16)
++                | (uint32_t(data[offset + 2]) << 8) | data[offset + 3];
++        memcpy(converted->data() + offset, "\x00\x00\x00\x01", 4);
++        offset += size_t(4) + length;
++    }
++    *output = converted;
++    return OK;
++}
++
+ ssize_t MediaMuxer::addTrack(const sp<AMessage> &format) {
+     Mutex::Autolock autoLock(mMuxerLock);
+ 
+@@ -120,11 +158,31 @@
+         return INVALID_OPERATION;
+     }
+ 
++    sp<AMessage> writerFormat = format;
++    if (hasLengthPrefixedHevc(format)) {
++        sp<ABuffer> csd;
++        if (format->findBuffer("csd-0", &csd)) {
++            sp<ABuffer> converted;
++            status_t result = hevcToAnnexB(csd, &converted);
++            if (result != OK) return result;
++            writerFormat = format->dup();
++            writerFormat->setBuffer("csd-0", converted);
++        }
++    }
+     sp<MetaData> trackMeta = new MetaData;
+-    if (convertMessageToMetaData(format, trackMeta) != OK) {
++    if (convertMessageToMetaData(writerFormat, trackMeta) != OK) {
+         return BAD_VALUE;
+     }
+ 
++    if (writerFormat != format) {
++        uint32_t type;
++        const void* data = nullptr;
++        size_t size = 0;
++        if (!trackMeta->findData(kKeyHVCC, &type, &data, &size)
++                || data == nullptr || size < 23) {
++            return BAD_VALUE;
++        }
++    }
+     sp<MediaAdapter> newTrack = new MediaAdapter(trackMeta);
+     status_t result = mWriter->addSource(newTrack);
+     if (result != OK) {
+@@ -235,10 +293,26 @@
+         return -EINVAL;
+     }
+ 
+-    MediaBuffer* mediaBuffer = new MediaBuffer(buffer);
++    sp<ABuffer> sample = buffer;
++    if (hasLengthPrefixedHevc(mFormatList[trackIndex]) && buffer->size() != 0) {
++        // addTrack already supplied this exact configuration to the writer.
++        // Do not resubmit it as a second CSD before the first video frame.
++        sp<ABuffer> csd;
++        if (flags == MediaCodec::BUFFER_FLAG_CODECCONFIG
++                && mFormatList[trackIndex]->findBuffer("csd-0", &csd)) {
++            if (csd->size() != buffer->size()
++                    || memcmp(csd->data(), buffer->data(), buffer->size()) != 0) {
++                return BAD_VALUE;
++            }
++            return OK;
++        }
++        status_t result = hevcToAnnexB(buffer, &sample);
++        if (result != OK) return result;
++    }
++    MediaBuffer* mediaBuffer = new MediaBuffer(sample);
+ 
+     mediaBuffer->add_ref(); // Released in MediaAdapter::signalBufferReturned().
+-    mediaBuffer->set_range(buffer->offset(), buffer->size());
++    mediaBuffer->set_range(sample->offset(), sample->size());
+ 
+     MetaDataBase &sampleMetaData = mediaBuffer->meta_data();
+     sampleMetaData.setInt64(kKeyTime, timeUs);

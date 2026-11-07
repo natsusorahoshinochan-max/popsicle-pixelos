@@ -1,0 +1,413 @@
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -8073,4 +8073,6 @@
+ 
+     <!-- Whether to explicitly disable the Video capability over IWLAN when Wi-Fi Calling is turned off. -->
+     <bool name="config_disable_video_capability_when_wfc_off">false</bool>
++    <!-- Enable only for a device using Xiaomi's verified 2.0 ultrasonic polling ABI. -->
++    <bool name="config_xiaomiFingerprintTouchPolling">false</bool>
+ </resources>
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -6626,4 +6626,5 @@
+   <java-symbol type="drawable" name="ic_cross_device_sync_airplane" />
+   <!-- Disable the Video Capability over IWLAN when Wi-Fi Calling is turned off  -->
+   <java-symbol type="bool" name="config_disable_video_capability_when_wfc_off" />
++  <java-symbol type="bool" name="config_xiaomiFingerprintTouchPolling" />
+   </resources>
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintAuthenticationClient.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintAuthenticationClient.java
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintAuthenticationClient.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintAuthenticationClient.java
+@@ -139,9 +139,16 @@
+         mAuthSessionCoordinator = biometricContext.getAuthSessionCoordinator();
+     }
+ 
++    @Nullable private XiaomiFingerprintTouchController mTouchController;
++
++    void setTouchController(@Nullable XiaomiFingerprintTouchController controller) {
++        mTouchController = controller;
++    }
++
+     @Override
+     public void start(@NonNull ClientMonitorCallback callback) {
+-        super.start(callback);
++        super.start(mTouchController == null ? callback
++                : mTouchController.wrapCallback(this, callback));
+ 
+         if (mSensorProps.isAnyUdfpsType()) {
+             // UDFPS requires user to touch before becoming "active"
+@@ -275,6 +282,12 @@
+ 
+     @Override
+     protected void startHalOperation() {
++        if (mTouchController != null
++                && !mTouchController.start(this, false, isKeyguard())) {
++            onError(android.hardware.biometrics.BiometricFingerprintConstants
++                    .FINGERPRINT_ERROR_HW_UNAVAILABLE, 0 /* vendorCode */);
++            return;
++        }
+         mSensorOverlays.show(getSensorId(), getRequestReason(), this);
+         mAuthenticationStateListeners.onAuthenticationStarted(new AuthenticationStartedInfo
+                 .Builder(BiometricSourceType.FINGERPRINT, getRequestReason()).build()
+@@ -337,6 +350,9 @@
+ 
+     @Override
+     protected void stopHalOperation() {
++        if (mTouchController != null && !mTouchController.stop(this)) {
++            Slog.e(TAG, "Unable to stop fingerprint touch polling during cancellation");
++        }
+         mSensorOverlays.hide(getSensorId());
+         mAuthenticationStateListeners.onAuthenticationStopped(new AuthenticationStoppedInfo
+                 .Builder(BiometricSourceType.FINGERPRINT, getRequestReason()).build()
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintDetectClient.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintDetectClient.java
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintDetectClient.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintDetectClient.java
+@@ -80,14 +80,24 @@
+         mOptions = options;
+     }
+ 
++    @Nullable private XiaomiFingerprintTouchController mTouchController;
++
++    void setTouchController(@Nullable XiaomiFingerprintTouchController controller) {
++        mTouchController = controller;
++    }
++
+     @Override
+     public void start(@NonNull ClientMonitorCallback callback) {
+-        super.start(callback);
++        super.start(mTouchController == null ? callback
++                : mTouchController.wrapCallback(this, callback));
+         startHalOperation();
+     }
+ 
+     @Override
+     protected void stopHalOperation() {
++        if (mTouchController != null && !mTouchController.stop(this)) {
++            Slog.e(TAG, "Unable to stop fingerprint touch polling during cancellation");
++        }
+         mSensorOverlays.hide(getSensorId());
+         mAuthenticationStateListeners.onAuthenticationStopped(
+                 new AuthenticationStoppedInfo.Builder(BiometricSourceType.FINGERPRINT,
+@@ -107,6 +117,12 @@
+ 
+     @Override
+     protected void startHalOperation() {
++        if (mTouchController != null
++                && !mTouchController.start(this, false, true)) {
++            onError(android.hardware.biometrics.BiometricFingerprintConstants
++                    .FINGERPRINT_ERROR_HW_UNAVAILABLE, 0 /* vendorCode */);
++            return;
++        }
+         mSensorOverlays.show(getSensorId(), BiometricRequestConstants.REASON_AUTH_KEYGUARD,
+                 this);
+         mAuthenticationStateListeners.onAuthenticationStarted(
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintEnrollClient.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintEnrollClient.java
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintEnrollClient.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintEnrollClient.java
+@@ -129,9 +129,16 @@
+                 + FingerprintEnrollOptions.enrollReasonToString(options.getEnrollReason()));
+     }
+ 
++    @Nullable private XiaomiFingerprintTouchController mTouchController;
++
++    void setTouchController(@Nullable XiaomiFingerprintTouchController controller) {
++        mTouchController = controller;
++    }
++
+     @Override
+     public void start(@NonNull ClientMonitorCallback callback) {
+-        super.start(callback);
++        super.start(mTouchController == null ? callback
++                : mTouchController.wrapCallback(this, callback));
+ 
+         BiometricNotificationUtils.cancelFingerprintEnrollNotification(getContext());
+     }
+@@ -145,6 +152,16 @@
+ 
+     @Override
+     public void onEnrollResult(BiometricAuthenticator.Identifier identifier, int remaining) {
++        if (mTouchController != null && isAlreadyCancelled()) {
++            return;
++        }
++        if (mTouchController != null
++                && !mTouchController.onEnrollmentProgress(this, remaining)) {
++            stopHalOperation();
++            onError(BiometricFingerprintConstants.FINGERPRINT_ERROR_HW_UNAVAILABLE,
++                    0 /* vendorCode */);
++            return;
++        }
+         super.onEnrollResult(identifier, remaining);
+ 
+         mSensorOverlays.ifUdfps(
+@@ -226,6 +243,12 @@
+ 
+     @Override
+     protected void startHalOperation() {
++        if (mTouchController != null
++                && !mTouchController.start(this, true, false)) {
++            onError(android.hardware.biometrics.BiometricFingerprintConstants
++                    .FINGERPRINT_ERROR_HW_UNAVAILABLE, 0 /* vendorCode */);
++            return;
++        }
+         mSensorOverlays.show(getSensorId(),
+                 getRequestReasonFromFingerprintEnrollReason(mEnrollReason), this);
+         mAuthenticationStateListeners.onAuthenticationStarted(new AuthenticationStartedInfo
+@@ -275,6 +298,9 @@
+ 
+     @Override
+     protected void stopHalOperation() {
++        if (mTouchController != null && !mTouchController.stop(this)) {
++            Slog.e(TAG, "Unable to stop fingerprint touch polling during cancellation");
++        }
+         mSensorOverlays.hide(getSensorId());
+         mAuthenticationStateListeners.onAuthenticationStopped(new AuthenticationStoppedInfo
+                 .Builder(BiometricSourceType.FINGERPRINT,
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java
+@@ -519,6 +519,7 @@
+                     mFingerprintSensors.get(sensorId).getSensorProperties(),
+                     mUdfpsOverlayController, mAuthenticationStateListeners, maxTemplatesPerUser,
+                     enrollReason, options);
++            client.setTouchController(mFingerprintSensors.get(sensorId).getTouchController());
+             scheduleForSensor(sensorId, client, mBiometricStateCallback);
+         });
+         return id;
+@@ -547,6 +548,7 @@
+                             mAuthenticationStatsCollector),
+                     mBiometricContext, mAuthenticationStateListeners, mUdfpsOverlayController,
+                     isStrongBiometric);
++            client.setTouchController(mFingerprintSensors.get(sensorId).getTouchController());
+             scheduleForSensor(sensorId, client, mBiometricStateCallback);
+         });
+ 
+@@ -578,6 +580,7 @@
+                     mFingerprintSensors.get(sensorId).getSensorProperties(),
+                     Utils.getCurrentStrength(sensorId),
+                     lockoutTracker);
++            client.setTouchController(mFingerprintSensors.get(sensorId).getTouchController());
+             scheduleForSensor(sensorId, client, new ClientMonitorCallback() {
+ 
+                 @Override
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/Sensor.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/Sensor.java
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/Sensor.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/Sensor.java
+@@ -92,6 +92,8 @@
+     @NonNull private final Map<Integer, Long> mAuthenticatorIds;
+     @NonNull private final BiometricContext mBiometricContext;
+ 
++    @Nullable private final XiaomiFingerprintTouchController mTouchController;
++
+     @Nullable AidlSession mCurrentSession;
+     @NonNull private Supplier<AidlSession> mLazySession;
+ 
+@@ -104,6 +106,11 @@
+         mToken = new Binder();
+         mHandler = handler;
+         mSensorProperties = sensorProperties;
++        mTouchController = context.getResources().getBoolean(
++                com.android.internal.R.bool.config_xiaomiFingerprintTouchPolling)
++                && sensorProperties.sensorType == android.hardware.fingerprint
++                        .FingerprintSensorProperties.TYPE_UDFPS_ULTRASONIC
++                ? new XiaomiFingerprintTouchController() : null;
+         mBiometricContext = biometricContext;
+         mAuthenticatorIds = new HashMap<>();
+         mCurrentSession = session;
+@@ -275,9 +282,16 @@
+         return mAuthenticatorIds;
+     }
+ 
++    @Nullable XiaomiFingerprintTouchController getTouchController() {
++        return mTestHalEnabled ? null : mTouchController;
++    }
++
+     void setTestHalEnabled(boolean enabled) {
+         Slog.w(TAG, "Fingerprint setTestHalEnabled: " + enabled);
+         if (enabled != mTestHalEnabled) {
++            if (mTouchController != null) {
++                mTouchController.stopCurrent();
++            }
+             // The framework should retrieve a new session from the HAL.
+             try {
+                 if (mCurrentSession != null) {
+@@ -325,6 +339,9 @@
+     }
+ 
+     public void onBinderDied() {
++        if (mTouchController != null) {
++            mTouchController.stopCurrent();
++        }
+         final BaseClientMonitor client = mScheduler.getCurrentClient();
+         if (client instanceof ErrorConsumer) {
+             Slog.e(TAG, "Sending fingerprint hardware unavailable error for client: " + client);
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/XiaomiFingerprintTouchController.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/XiaomiFingerprintTouchController.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/XiaomiFingerprintTouchController.java
+@@ -0,0 +1,164 @@
++/*
++ * Copyright (C) 2020 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.biometrics.sensors.fingerprint.aidl;
++
++import android.os.IBinder;
++import android.os.Parcel;
++import android.os.RemoteException;
++import android.os.ServiceManager;
++import android.util.Slog;
++
++import com.android.server.biometrics.sensors.BaseClientMonitor;
++import com.android.server.biometrics.sensors.ClientMonitorCallback;
++
++import java.util.Objects;
++
++/** Per-sensor ownership of the selected Xiaomi 2.0 ultrasonic touch-polling contract. */
++final class XiaomiFingerprintTouchController {
++    private static final String TAG = "XiaomiFingerprintTouch";
++    private static final String DESCRIPTOR =
++            "vendor.xiaomi.hardware.fingerprintextension.IXiaomiFingerprint";
++
++    interface Command {
++        int send(int command, int parameter) throws RemoteException;
++    }
++
++    private final Command mCommand;
++    private Object mOwner;
++    private boolean mEnrollment;
++    private boolean mRunning;
++
++    XiaomiFingerprintTouchController() {
++        this(XiaomiFingerprintTouchController::sendExtensionCommand);
++    }
++
++    XiaomiFingerprintTouchController(Command command) {
++        mCommand = Objects.requireNonNull(command);
++    }
++
++    // Calls arrive on the sensor's biometric handler. Synchronization also protects cleanup
++    // against callbacks dispatched from another thread; a stale client cannot stop its successor.
++    synchronized boolean start(Object owner, boolean enrollment, boolean keyguard) {
++        Objects.requireNonNull(owner);
++        if (mOwner == owner && mRunning) {
++            return true;
++        }
++        if (mOwner != null && !stop(mOwner)) {
++            return false;
++        }
++        mOwner = owner;
++        mEnrollment = enrollment;
++        if (!send(4, enrollment ? 1 : 3) || !send(7, keyguard ? 1 : 0)) {
++            stop(owner);
++            return false;
++        }
++        mRunning = true;
++        return true;
++    }
++
++    synchronized boolean onEnrollmentProgress(Object owner, int remaining) {
++        if (mOwner != owner || !mEnrollment || !mRunning || remaining < 0) {
++            return false;
++        }
++        // This HAL stops polling after each accepted sample, not just at session completion.
++        return remaining == 0 ? stop(owner) : send(4, 1);
++    }
++
++    synchronized boolean stop(Object owner) {
++        if (mOwner == null || mOwner != owner) {
++            return true; // The caller has no ownership of the current sensor operation.
++        }
++        mRunning = false;
++        boolean stopped = send(4, mEnrollment ? 2 : 4);
++        boolean keyguardCleared = send(7, 0);
++        if (stopped && keyguardCleared) {
++            mOwner = null;
++            return true;
++        }
++        // Retain ownership so a following start must retry cleanup before taking over.
++        return false;
++    }
++
++    synchronized void stopCurrent() {
++        if (mOwner != null && !stop(mOwner)) {
++            Slog.e(TAG, "Unable to clear touch polling after sensor shutdown");
++        }
++    }
++
++    ClientMonitorCallback wrapCallback(Object owner, ClientMonitorCallback callback) {
++        return new ClientMonitorCallback() {
++            @Override
++            public void onClientStarted(BaseClientMonitor client) {
++                callback.onClientStarted(client);
++            }
++
++            @Override
++            public void onBiometricAction(int action) {
++                callback.onBiometricAction(action);
++            }
++
++            @Override
++            public void onClientFinished(BaseClientMonitor client, boolean success) {
++                // Cleanup precedes scheduler completion; it must not stop a successor.
++                boolean stopped = stop(owner);
++                callback.onClientFinished(client, success && stopped);
++            }
++        };
++    }
++
++    private boolean send(int command, int parameter) {
++        try {
++            int result = mCommand.send(command, parameter);
++            if (result == 0) {
++                return true;
++            }
++            Slog.e(TAG, "Extension rejected " + command + "/" + parameter + ": " + result);
++        } catch (RemoteException | RuntimeException e) {
++            Slog.e(TAG, "Extension failed " + command + "/" + parameter, e);
++        }
++        return false;
++    }
++
++    private static int sendExtensionCommand(int command, int parameter) throws RemoteException {
++        // Resolve each operation instead of retaining a Binder across a HAL service restart.
++        IBinder binder = ServiceManager.checkService(DESCRIPTOR + "/default");
++        if (binder == null) {
++            throw new RemoteException("Fingerprint touch extension is unavailable");
++        }
++        return sendExtensionCommand(binder, command, parameter);
++    }
++
++    static int sendExtensionCommand(IBinder binder, int command, int parameter)
++            throws RemoteException {
++        Parcel data = Parcel.obtain(binder);
++        Parcel reply = Parcel.obtain();
++        try {
++            // Verified V1 extCmd ABI: transaction 1, two int inputs, exception header then int.
++            data.writeInterfaceToken(DESCRIPTOR);
++            data.writeInt(command);
++            data.writeInt(parameter);
++            if (!binder.transact(IBinder.FIRST_CALL_TRANSACTION, data, reply, 0)) {
++                throw new RemoteException("Fingerprint touch extension rejected transaction");
++            }
++            reply.readException();
++            return reply.readInt();
++        } finally {
++            reply.recycle();
++            data.recycle();
++        }
++    }
++}

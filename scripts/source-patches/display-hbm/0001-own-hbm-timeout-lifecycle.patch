@@ -1,0 +1,105 @@
+diff --git a/services/core/java/com/android/server/display/HighBrightnessModeController.java b/services/core/java/com/android/server/display/HighBrightnessModeController.java
+--- a/services/core/java/com/android/server/display/HighBrightnessModeController.java
++++ b/services/core/java/com/android/server/display/HighBrightnessModeController.java
+@@ -90,6 +90,8 @@
+     private HdrBrightnessDeviceConfig mHdrBrightnessCfg;
+     private IBinder mRegisteredDisplayToken;
+ 
++    // DisplayPowerController.stop() is terminal; display changes cannot restart this controller.
++    private boolean mStopped;
+     private boolean mIsInAllowedAmbientRange = false;
+     private boolean mIsTimeAvailable = false;
+     private boolean mIsAutoBrightnessEnabled = false;
+@@ -291,16 +293,24 @@
+     }
+ 
+     void stop() {
++        mStopped = true;
++        mHandler.removeCallbacks(mRecalcRunnable);
+         registerHdrListener(null /*displayToken*/);
+         mSettingsObserver.stopObserving();
+     }
+ 
+     void setHighBrightnessModeMetadata(@Nullable HighBrightnessModeMetadata hbmInfo) {
++        // loadFromConfig replaces the metadata before resetting the display configuration.
++        mHandler.removeCallbacks(mRecalcRunnable);
+         mHighBrightnessModeMetadata = hbmInfo;
+     }
+ 
+     void resetHbmData(int width, int height, IBinder displayToken, String displayUniqueId,
+             HighBrightnessModeData hbmData, HdrBrightnessDeviceConfig hdrBrightnessCfg) {
++        mHandler.removeCallbacks(mRecalcRunnable);
++        if (mStopped) {
++            return;
++        }
+         mWidth = width;
+         mHeight = height;
+         mHbmData = hbmData;
+@@ -311,11 +321,11 @@
+         mSettingsObserver.stopObserving();
+         if (hbmControllerEnabled()) {
+             registerHdrListener(displayToken);
+-            recalculateTimeAllowance();
+-            if (!mHbmData.allowInLowPowerMode) {
+-                mIsBlockedByLowPowerMode = false;
+-                mSettingsObserver.startObserving();
+-            }
++        }
++        recalculateTimeAllowance();
++        if (hbmControllerEnabled() && !mHbmData.allowInLowPowerMode) {
++            mIsBlockedByLowPowerMode = false;
++            mSettingsObserver.startObserving();
+         }
+     }
+ 
+@@ -486,6 +496,17 @@
+      * Recalculates the allowable HBM time.
+      */
+     private void recalculateTimeAllowance() {
++        // A state change may no longer require a timer. Remove the old deadline even when
++        // there is no replacement, including when display data or metadata was removed.
++        mHandler.removeCallbacks(mRecalcRunnable);
++        if (mStopped) {
++            return;
++        }
++        if (!hbmControllerEnabled()) {
++            mIsTimeAvailable = false;
++            updateHbmMode();
++            return;
++        }
+         final long currentTime = mClock.uptimeMillis();
+         final long remainingTime = calculateRemainingTime(currentTime);
+ 
+@@ -500,10 +521,20 @@
+         // brightness change doesn't happen before then.
+         long nextTimeout = -1;
+         final ArrayDeque<HbmEvent> hbmEvents = mHighBrightnessModeMetadata.getHbmEventQueue();
+-        if (mBrightness > mHbmData.transitionPoint) {
+-            // if we're in high-lux now, timeout when we run out of allowed time.
+-            nextTimeout = currentTime + remainingTime;
+-        } else if (!mIsTimeAvailable && hbmEvents.size() > 0) {
++        // All-zero timing already allows HBM without a time restriction (remaining >= min).
++        // Keep that policy, but do not schedule callbacks that cannot change its allowance.
++        final boolean isTimeLimited = mHbmData.timeWindowMillis != 0
++                || mHbmData.timeMaxMillis != 0 || mHbmData.timeMinMillis != 0;
++        final boolean isTimeDraining =
++                mHighBrightnessModeMetadata.getRunningStartTimeMillis() != -1;
++        if (isTimeLimited && isTimeDraining) {
++            // Wait for the DPC's actual brightness update after exhaustion. Repeating a timer
++            // with no time left cannot recover any budget while the session is still running.
++            if (remainingTime > 0) {
++                nextTimeout = currentTime + remainingTime;
++            }
++        } else if (isTimeLimited && !mIsTimeAvailable && hbmEvents.size() > 0) {
++            // HDR may be above the transition point without consuming the sunlight budget.
+             // If we are not allowed...timeout when the oldest event moved outside of the timing
+             // window by at least minTime. Basically, we're calculating the soonest time we can
+             // get {@code timeMinMillis} back to us.
+@@ -541,7 +572,6 @@
+         }
+ 
+         if (nextTimeout != -1) {
+-            mHandler.removeCallbacks(mRecalcRunnable);
+             mHandler.postAtTime(mRecalcRunnable, nextTimeout + 1);
+         }
+         // Update the state of the world

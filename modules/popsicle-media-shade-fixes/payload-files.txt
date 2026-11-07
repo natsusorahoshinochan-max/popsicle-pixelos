@@ -1,0 +1,3 @@
+system_ext/priv-app/SystemUI/SystemUI.apk
+system_ext/priv-app/SystemUI/oat/arm64/SystemUI.odex
+system_ext/priv-app/SystemUI/oat/arm64/SystemUI.vdex

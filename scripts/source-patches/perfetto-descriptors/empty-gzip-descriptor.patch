@@ -1,0 +1,61 @@
+--- a/src/trace_processor/importers/proto/BUILD.gn
++++ b/src/trace_processor/importers/proto/BUILD.gn
+@@ -350,6 +350,7 @@
+     "../../util:args_utils",
+     "../../util:build_id",
+     "../../util:descriptors",
++    "../../util:gzip",
+     "../../util:profiler_util",
+     "../common",
+     "../ftrace:full",
+--- a/src/trace_processor/importers/proto/proto_trace_reader.cc
++++ b/src/trace_processor/importers/proto/proto_trace_reader.cc
+@@ -207,12 +207,28 @@
+     size = extension.size;
+   } else if (decoder.has_extension_set_gzip()) {
+     auto gzipped = decoder.extension_set_gzip();
+-    decompressed =
+-        util::GzipDecompressor::DecompressFully(gzipped.data, gzipped.size);
+-    if (decompressed.empty()) {
+-      return base::ErrStatus(
+-          "Failed to decompress gzipped extension descriptor");
+-    }
++    util::GzipDecompressor decompressor;
++    const uint8_t* compressed = gzipped.data;
++    size_t remaining = gzipped.size;
++    do {
++      const auto result = decompressor.FeedAndExtract(
++          compressed, remaining,
++          [&decompressed](const uint8_t* chunk, size_t length) {
++            decompressed.insert(decompressed.end(), chunk, chunk + length);
++          });
++      // Empty output is valid, but every member must reach its checked trailer.
++      // Like GzipTraceParser, consume concatenated members; never ignore a
++      // corrupt/truncated later member or arbitrary trailing bytes.
++      if (result != util::GzipDecompressor::ResultCode::kEof ||
++          decompressor.AvailIn() >= remaining) {
++        return base::ErrStatus(
++            "Failed to decompress gzipped extension descriptor");
++      }
++      compressed += remaining - decompressor.AvailIn();
++      remaining = decompressor.AvailIn();
++      if (remaining != 0)
++        decompressor.Reset();
++    } while (remaining != 0);
+     data = decompressed.data();
+     size = decompressed.size();
+   } else {
+--- a/src/trace_processor/util/descriptors.cc
++++ b/src/trace_processor/util/descriptors.cc
+@@ -245,6 +245,11 @@
+     bool merge_existing_messages) {
+   protos::pbzero::FileDescriptorSet::Decoder proto(file_descriptor_set_proto,
+                                                    size);
++  // A truncated field must not be accepted as an empty descriptor set. Validate
++  // the complete outer message before mutating the pool or processed file set.
++  if (proto.bytes_left()) {
++    return base::ErrStatus("Failed to parse FileDescriptorSet fully");
++  }
+   std::vector<ExtensionInfo> extensions;
+   for (auto it = proto.file(); it; ++it) {
+     protos::pbzero::FileDescriptorProto::Decoder file(*it);

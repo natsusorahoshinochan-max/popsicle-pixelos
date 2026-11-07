@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Complete the platform side of the fixed A17 vendor AVF client macros.
+# The OEM qcvm launcher predates the separate *_vendor manager domains.
+# Keep the full macro, including HAL membership and bidirectional memfd access.
+hal_client_domain(virtualizationmanager_vendor, hal_secretkeeper)
+hal_client_domain(virtualizationmanager_vendor, hal_vm_capabilities)
+is_flag_enabled(RELEASE_AVF_ENABLE_EARLY_VM, `
+    hal_client_domain(early_virtmgr_vendor, hal_secretkeeper)
+')

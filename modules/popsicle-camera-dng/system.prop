@@ -1,0 +1,2 @@
+# Final-input diagnostics are off by default; no automatic photo copies.
+debug.popsicle.dng.capture=0

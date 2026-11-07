@@ -1,0 +1,107 @@
+diff --git a/android/androidmk.go b/android/androidmk.go
+--- a/android/androidmk.go
++++ b/android/androidmk.go
+@@ -840,7 +840,7 @@
+ 	}
+ 
+ 	return module.Enabled(ctx) &&
+-		!module.commonProperties.HideFromMake &&
++		!module.IsHideFromMake() &&
+ 		// Make does not understand LinuxBionic
+ 		module.Os() != LinuxBionic &&
+ 		// Make does not understand LinuxMusl, except when we are building with USE_HOST_MUSL=true
+diff --git a/android/module.go b/android/module.go
+--- a/android/module.go
++++ b/android/module.go
+@@ -1509,9 +1509,9 @@
+ 	m.commonProperties.HideFromMake = true
+ }
+ 
+-// IsHideFromMake returns true if HideFromMake was previously called.
++// IsHideFromMake returns true if explicitly hidden or replaced by a prebuilt.
+ func (m *ModuleBase) IsHideFromMake() bool {
+-	return m.commonProperties.HideFromMake == true
++	return m.commonProperties.HideFromMake || m.commonProperties.ReplacedByPrebuilt
+ }
+ 
+ // SkipInstall marks this variant to not create install rules when ctx.Install* are called.
+@@ -1538,7 +1538,6 @@
+ 
+ func (m *ModuleBase) ReplacedByPrebuilt() {
+ 	m.commonProperties.ReplacedByPrebuilt = true
+-	m.HideFromMake()
+ }
+ 
+ func (m *ModuleBase) IsReplacedByPrebuilt() bool {
+@@ -2522,7 +2521,7 @@
+ 		Target:                           m.commonProperties.CompileTarget,
+ 		SkipAndroidMkProcessing:          shouldSkipAndroidMkProcessing(ctx, m),
+ 		UninstallableApexPlatformVariant: m.commonProperties.UninstallableApexPlatformVariant,
+-		HideFromMake:                     m.commonProperties.HideFromMake,
++		HideFromMake:                     m.IsHideFromMake(),
+ 		SkipInstall:                      m.commonProperties.SkipInstall,
+ 		Host:                             m.Host(),
+ 		Owner:                            m.module.Owner(),
+diff --git a/android/module_context.go b/android/module_context.go
+--- a/android/module_context.go
++++ b/android/module_context.go
+@@ -621,7 +621,7 @@
+ 		return false
+ 	}
+ 
+-	if m.module.base().commonProperties.HideFromMake {
++	if m.module.base().IsHideFromMake() {
+ 		return false
+ 	}
+ 
+diff --git a/android/prebuilt.go b/android/prebuilt.go
+--- a/android/prebuilt.go
++++ b/android/prebuilt.go
+@@ -574,6 +574,18 @@
+ // prebuiltProviderMutator sets the PrebuiltInfoProvider.
+ func prebuiltProviderMutator(ctx BottomUpMutatorContext) {
+ 	m := ctx.Module()
++	if m.IsReplacedByPrebuilt() {
++		// Selection precedes module-specific variants. A shared-only prebuilt,
++		// for example, is disabled for the later static variant. Keep that
++		// source variant, without undoing any explicit HideFromMake reason.
++		replaced := false
++		ctx.visitDirectDepsWithTag(PrebuiltDepTag, func(prebuilt Module) {
++			if p := GetEmbeddedPrebuilt(prebuilt); p != nil && p.UsePrebuilt() {
++				replaced = true
++			}
++		})
++		m.base().commonProperties.ReplacedByPrebuilt = replaced
++	}
+ 
+ 	info := PrebuiltInfo{}
+ 
+diff --git a/cc/cc.go b/cc/cc.go
+--- a/cc/cc.go
++++ b/cc/cc.go
+@@ -1049,6 +1049,12 @@
+ 	name string
+ }
+ 
++func (t dependencyTag) ReplaceSourceWithPrebuilt() bool {
++	// These refer to the source library's own objects and variant metadata,
++	// even when a prebuilt replaces that static library for other consumers.
++	return t != reuseObjTag && t != staticVariantTag
++}
++
+ // installDependencyTag is used for tagging miscellaneous dependency types that don't fit into
+ // libraryDependencyTag, but where the dependency needs to be installed when the parent is
+ // installed.
+diff --git a/cc/image.go b/cc/image.go
+--- a/cc/image.go
++++ b/cc/image.go
+@@ -473,6 +473,9 @@
+ 		if lib.Properties.Target.Vendor.No_stubs {
+ 			proptools.Clear(&lib.Properties.Stubs)
+ 		}
++	} else if lib, ok := m.compiler.(*prebuiltLibraryLinker); ok {
++		// Prebuilt selection reads the linker's inputs, not the source compiler's.
++		lib.properties.Srcs.AppendSimpleValue(lib.baseCompiler.Properties.Target.Vendor.Srcs)
+ 	}
+ }
+ 

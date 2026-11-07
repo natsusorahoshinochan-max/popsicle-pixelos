@@ -1,0 +1,239 @@
+diff --git a/core/java/android/app/INotificationManager.aidl b/core/java/android/app/INotificationManager.aidl
+--- a/core/java/android/app/INotificationManager.aidl
++++ b/core/java/android/app/INotificationManager.aidl
+@@ -290,4 +290,7 @@
+ 
+     @EnforcePermission("STATUS_BAR_SERVICE")
+     oneway void logHsuNotificationPostStatus(in StatusBarNotification sbn, int status);
++    // Original rear assistant protocol. Append to preserve existing transaction numbers.
++    void areNotificationsEnabledList(in List<String> packages,
++            out List<String> outPackages, out List<String> outEnabledFlags, int userId);
+ }
+diff --git a/core/res/AndroidManifest.xml b/core/res/AndroidManifest.xml
+--- a/core/res/AndroidManifest.xml
++++ b/core/res/AndroidManifest.xml
+@@ -20,6 +20,10 @@
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+     package="android" coreApp="true" android:sharedUserId="android.uid.system"
+     android:sharedUserLabel="@string/android_system_label">
++
++    <!-- OEM notification settings: same protection as the original framework extension. -->
++    <permission android:name="com.android.systemui.permission.NOTIFICATION"
++        android:protectionLevel="signatureOrSystem" />
+ 
+     <!-- ================================================ -->
+     <!-- Special broadcasts that only the system can send -->
+diff --git a/packages/SystemUI/AndroidManifest.xml b/packages/SystemUI/AndroidManifest.xml
+--- a/packages/SystemUI/AndroidManifest.xml
++++ b/packages/SystemUI/AndroidManifest.xml
+@@ -23,6 +23,7 @@
+     coreApp="true">
+ 
+     <uses-permission android:name="com.xiaomi.subscreencenter.SubScreenService.BIND_SERVICE" />
++    <uses-permission android:name="com.android.systemui.permission.NOTIFICATION" />
+ 
+     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+ 
+@@ -1353,5 +1354,11 @@
+             android:exported="true"
+            />
+ 
++        <provider
++            android:name=".statusbar.notification.OemFocusNotificationProvider"
++            android:authorities="statusbar.notification"
++            android:enabled="@*android:bool/config_oemRearSmartAssistantSupported"
++            android:exported="true"
++            android:permission="com.android.systemui.permission.NOTIFICATION" />
+     </application>
+ </manifest>
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/notification/OemFocusNotificationProvider.java b/packages/SystemUI/src/com/android/systemui/statusbar/notification/OemFocusNotificationProvider.java
+new file mode 100644
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/notification/OemFocusNotificationProvider.java
+@@ -0,0 +1,145 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.statusbar.notification;
++
++import android.content.ContentProvider;
++import android.content.ContentValues;
++import android.content.SharedPreferences;
++import android.database.ContentObserver;
++import android.database.Cursor;
++import android.net.Uri;
++import android.os.Bundle;
++import android.os.Handler;
++import android.os.Looper;
++import android.text.TextUtils;
++import android.util.Log;
++
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.Objects;
++
++/** The original rear assistant's persisted Focus switches and URI update protocol. */
++public final class OemFocusNotificationProvider extends ContentProvider {
++    private static final String TAG = "OemFocusNotification";
++    private static final String PERMISSION = "com.android.systemui.permission.NOTIFICATION";
++    private static final Uri FOCUS_URI = Uri.parse(
++            "content://statusbar.notification/canShowFocus");
++    private SharedPreferences mPreferences;
++    private ContentObserver mObserver;
++
++    @Override
++    public boolean onCreate() {
++        // Match the OEM preference file, including its historical multi-process mode.
++        mPreferences = requireContext().getSharedPreferences("app_notification", 4);
++        mObserver = new ContentObserver(new Handler(Looper.getMainLooper())) {
++            @Override
++            public void onChange(boolean selfChange, Uri uri) {
++                if (uri == null) return;
++                try {
++                    updateFocus(mPreferences, uri);
++                } catch (RuntimeException e) {
++                    Log.w(TAG, "Cannot update Focus preference from " + uri, e);
++                }
++            }
++        };
++        requireContext().getContentResolver().registerContentObserver(
++                FOCUS_URI, false, mObserver);
++        return true;
++    }
++
++    @Override
++    public Bundle call(String method, String arg, Bundle extras) {
++        // ContentProvider.call does not apply the manifest's read/write permissions.
++        requireContext().enforceCallingOrSelfPermission(PERMISSION, "Read Focus settings");
++        if (!"canShowAllFocus".equals(method)) {
++            throw new UnsupportedOperationException("Unsupported Focus method: " + method);
++        }
++        ArrayList<String> packages = Objects.requireNonNull(extras, "extras")
++                .getStringArrayList("packages");
++        Bundle result = new Bundle();
++        result.putSerializable("canShowAllFocus", readFocus(mPreferences, packages));
++        return result;
++    }
++
++    static HashMap<String, Boolean> readFocus(SharedPreferences preferences,
++            ArrayList<String> packages) {
++        HashMap<String, Boolean> result = new HashMap<>();
++        if (packages == null) return result;
++        for (String packageName : packages) {
++            String key = packageName + "_focus";
++            result.put(packageName, !preferences.contains(key)
++                    || getFocusState(preferences, key) != 0);
++        }
++        return result;
++    }
++
++    static int getFocusState(SharedPreferences preferences, String key) {
++        if (!preferences.contains(key)) return -1;
++        try {
++            return preferences.getInt(key, 1);
++        } catch (ClassCastException e) {
++            boolean oldValue = preferences.getBoolean(key, false);
++            preferences.edit().putInt(key, oldValue ? 1 : 0).apply();
++            return oldValue ? 1 : 0;
++        } catch (Exception e) {
++            Log.w(TAG, "Cannot read Focus preference " + key, e);
++            return -1;
++        }
++    }
++
++    static void updateFocus(SharedPreferences preferences, Uri uri) {
++        String packageName = uri.getQueryParameter("package");
++        if (TextUtils.isEmpty(packageName)) return;
++        boolean enabled = Boolean.parseBoolean(uri.getQueryParameter("canShowFocus"));
++        preferences.edit().putInt(packageName + "_focus", enabled ? 1 : 0).apply();
++    }
++
++    @Override
++    public void shutdown() {
++        if (mObserver != null) {
++            requireContext().getContentResolver().unregisterContentObserver(mObserver);
++            mObserver = null;
++        }
++        super.shutdown();
++    }
++
++    @Override
++    public Cursor query(Uri uri, String[] projection, String selection,
++            String[] selectionArgs, String sortOrder) {
++        throw new UnsupportedOperationException("Focus settings use call()");
++    }
++
++    @Override
++    public String getType(Uri uri) {
++        throw new UnsupportedOperationException("Focus settings have no row MIME type");
++    }
++
++    @Override
++    public Uri insert(Uri uri, ContentValues values) {
++        throw new UnsupportedOperationException("Focus settings use URI notifications");
++    }
++
++    @Override
++    public int delete(Uri uri, String selection, String[] selectionArgs) {
++        throw new UnsupportedOperationException("Focus settings use URI notifications");
++    }
++
++    @Override
++    public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
++        throw new UnsupportedOperationException("Focus settings use URI notifications");
++    }
++}
+diff --git a/services/core/java/com/android/server/notification/NotificationManagerService.java b/services/core/java/com/android/server/notification/NotificationManagerService.java
+--- a/services/core/java/com/android/server/notification/NotificationManagerService.java
++++ b/services/core/java/com/android/server/notification/NotificationManagerService.java
+@@ -4705,6 +4705,37 @@
+             setNotificationsEnabledForPackage(pkg, uid, enabled);
+         }
+ 
++        /** OEM batch query using the same permission and user checks as individual queries. */
++        @Override
++        public void areNotificationsEnabledList(List<String> packages,
++                List<String> outPackages, List<String> outEnabledFlags, int userId) {
++            if (packages == null || packages.isEmpty()) return;
++            for (String pkg : packages) {
++                if (pkg == null) continue;
++                enforceSystemOrSystemUIOrSamePackage(pkg,
++                        "Caller not system or systemui or same package");
++                if (UserHandle.getCallingUserId() != userId) {
++                    getContext().enforceCallingPermission(
++                            android.Manifest.permission.INTERACT_ACROSS_USERS,
++                            "areNotificationsEnabledList for user " + userId);
++                }
++                // Resolve the requested user's installed UID after checking the real caller.
++                final int uid;
++                final long identity = Binder.clearCallingIdentity();
++                try {
++                    uid = getContext().getPackageManager().getPackageUidAsUser(pkg, 0, userId);
++                } catch (PackageManager.NameNotFoundException e) {
++                    Slog.w(TAG, "areNotificationsEnabledList package not found: " + pkg);
++                    continue;
++                } finally {
++                    Binder.restoreCallingIdentity(identity);
++                }
++                boolean enabled = areNotificationsEnabledForPackage(pkg, uid);
++                outPackages.add(pkg);
++                outEnabledFlags.add(Boolean.toString(enabled));
++            }
++        }
++
+         /**
+          * Use this when you just want to know if notifications are OK for this package.
+          */

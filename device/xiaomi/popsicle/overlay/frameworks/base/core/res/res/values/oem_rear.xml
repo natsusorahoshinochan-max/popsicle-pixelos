@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="config_oemRearDisplayUniqueId" translatable="false">local:4630946457447247252</string>
+    <string name="config_oemRearHomeComponent" translatable="false">com.xiaomi.subscreencenter/.SubScreenLauncher</string>
+    <bool name="config_oemRearSmartAssistantSupported">true</bool>
+</resources>

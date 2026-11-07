@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<layouts>
+    <layout>
+        <state>0</state>
+        <name>popsicle_dual_display</name>
+        <display enabled="true" defaultDisplay="true">
+            <address>4630946457447247251</address>
+        </display>
+        <!-- Reserve logical display 1 before physical display discovery so the
+             original rear application's display and input routes remain valid.
+             Its own group keeps display-scoped sleep/wake independent of the
+             main screen; per-group AOD still requires framework integration. -->
+        <display enabled="true" defaultDisplay="false" displayGroup="rear">
+            <address>4630946457447247252</address>
+        </display>
+    </layout>
+</layouts>

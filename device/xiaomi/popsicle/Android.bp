@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: Apache-2.0
+
+prebuilt_etc {
+    name: "popsicle_display_layout_configuration",
+    vendor: true,
+    src: "configs/displayconfig/display_layout_configuration.xml",
+    sub_dir: "displayconfig",
+    filename: "display_layout_configuration.xml",
+}
+
+// Generate the descriptor from the product's actual extension registry.
+// Keep the producer and the installed file in the dependency graph.
+genrule {
+    name: "popsicle_vendor_tracing_descriptors",
+    tools: ["tracing_proto_extensions"],
+    srcs: ["configs/tracing/vendor_tracing_protos.json"],
+    out: ["tracing_descriptors.gz"],
+    cmd: "$(location tracing_proto_extensions) --json $(in) -I . " +
+        "--descriptor-out $(out) --gzip",
+}
+
+prebuilt_etc {
+    name: "vendor_tracing_descriptors",
+    vendor: true,
+    src: ":popsicle_vendor_tracing_descriptors",
+    filename: "tracing_descriptors.gz",
+}

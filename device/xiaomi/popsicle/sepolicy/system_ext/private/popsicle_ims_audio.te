@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Product-owned adapter uses the existing Qualcomm system_ext Binder label.
+type popsicle_ims_adapter, domain, coredomain;
+type popsicle_ims_adapter_exec, exec_type, system_file_type, file_type;
+init_daemon_domain(popsicle_ims_adapter)
+binder_use(popsicle_ims_adapter)
+# Qualcomm already grants audioserver find access to this selected service.
+allow popsicle_ims_adapter vendor_audioserver_service:service_manager { add find };
+binder_call(audioserver, popsicle_ims_adapter)
+
+# Runs only the official QCRIL audio controller, not the QtiTelephony application.
+type popsicle_ims_audio, domain, coredomain;
+app_domain(popsicle_ims_audio)
+allow popsicle_ims_audio system_app_data_file:dir create_dir_perms;
+allow popsicle_ims_audio system_app_data_file:{ file lnk_file } create_file_perms;
+net_domain(popsicle_ims_audio)
+# IQcRilAudio/slot1 and slot2 use the retained telephony HAL service policy.
+hal_client_domain(popsicle_ims_audio, hal_telephony)
+binder_use(popsicle_ims_audio)
+binder_call(popsicle_ims_audio, system_server)
+binder_call(popsicle_ims_audio, radio)
+binder_call(popsicle_ims_audio, audioserver)
+# AudioManager.setParameters reaches native AudioFlinger through AudioSystem.
+allow popsicle_ims_audio audioserver_service:service_manager find;
+allow popsicle_ims_audio { activity_service audio_service batteryproperties_service package_service permission_service radio_service registry_service user_service }:service_manager find;

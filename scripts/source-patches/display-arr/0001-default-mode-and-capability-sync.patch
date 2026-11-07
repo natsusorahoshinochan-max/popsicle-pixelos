@@ -1,0 +1,53 @@
+--- a/services/core/java/com/android/server/display/LocalDisplayAdapter.java
++++ b/services/core/java/com/android/server/display/LocalDisplayAdapter.java
+@@ -503,6 +503,25 @@
+             if (mDefaultModeId == INVALID_MODE_ID) {
+                 mDefaultModeId = activeRecord.mMode.getModeId();
+                 mDefaultModeGroup = mActiveSfDisplayMode.group;
++                // Opt in only a verified, same-resolution ARR configuration for this display.
++                // Keep the normal default when the property or candidate is absent.
++                final int arrModeId = SystemProperties.getInt(
++                        "debug.sf.arr_default_mode_" + mPhysicalDisplayId, INVALID_MODE_ID);
++                for (SurfaceControl.DisplayMode mode : displayModes) {
++                    if (isInternal && mode.id == arrModeId
++                            && mode.width == mActiveSfDisplayMode.width
++                            && mode.height == mActiveSfDisplayMode.height
++                            && mode.vsyncRate > mode.peakRefreshRate) {
++                        for (DisplayModeRecord record : records) {
++                            if (record.hasMatchingMode(mode)) {
++                                mDefaultModeId = record.mMode.getModeId();
++                                mDefaultModeGroup = mode.group;
++                                break;
++                            }
++                        }
++                        break;
++                    }
++                }
+                 mActiveRenderFrameRate = renderFrameRate;
+             } else if (modesAdded && activeModeChanged) {
+                 Slog.d(TAG, "New display modes are added and the active mode has changed, "
+@@ -1272,9 +1291,22 @@
+                 long appVsyncOffsetNanos, long presentationDeadlineNanos,
+                 DisplayEventReceiver.FrameRateOverride[] overrides,
+                 float[] supportedRefreshRates) {
+-            if (updateActiveModeAndFrameOverrideChangedLocked(sfModeId,
++            final boolean modeChanged = mActiveSfDisplayMode.id != sfModeId;
++            boolean changed = updateActiveModeAndFrameOverrideChangedLocked(sfModeId,
+                     renderFrameRate, appVsyncOffsetNanos,
+-                    presentationDeadlineNanos, overrides, supportedRefreshRates)) {
++                    presentationDeadlineNanos, overrides, supportedRefreshRates);
++            if (modeChanged) {
++                // ARR support belongs to the active SF configuration, not the boot mode.
++                // Avoid a binder query for render-rate-only events within one ARR mode.
++                SurfaceControl.DynamicDisplayInfo dynamicInfo =
++                        mSurfaceControlProxy.getDynamicDisplayInfo(mPhysicalDisplayId);
++                if (dynamicInfo != null && dynamicInfo.activeDisplayModeId == sfModeId) {
++                    changed |= updateHasArrSupportLocked(dynamicInfo.hasArrSupport);
++                    changed |= updateFrameRateCategoryRatesLocked(
++                            dynamicInfo.frameRateCategoryRate);
++                }
++            }
++            if (changed) {
+                 updateDeviceInfoLocked();
+             }
+         }

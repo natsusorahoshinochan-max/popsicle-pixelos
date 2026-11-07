@@ -1,0 +1,4 @@
+<resources>
+    <!-- Center normal status bar contents within the existing safe bar height. -->
+    <dimen name="status_bar_padding_top">0px</dimen>
+</resources>

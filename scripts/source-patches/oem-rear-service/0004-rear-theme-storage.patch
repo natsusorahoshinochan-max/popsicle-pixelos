@@ -1,0 +1,293 @@
+--- a/cmds/installd/InstalldNativeService.cpp
++++ b/cmds/installd/InstalldNativeService.cpp
+@@ -70,6 +70,7 @@
+ #include "globals.h"
+ #include "installd_deps.h"
+ #include "utils.h"
++#include "OemRearStorage.h"
+ 
+ #include "CacheTracker.h"
+ #include "CrateManager.h"
+@@ -428,6 +429,12 @@
+ #endif // GRANULAR_LOCKS
+ 
+ }  // namespace
++
++static bool usesOemRearStorage(const std::optional<std::string>& uuid,
++                              const std::string& packageName) {
++    return !uuid && packageName == "com.xiaomi.subscreencenter"
++            && android::base::GetProperty("ro.product.device", "") == "popsicle";
++}
+ 
+ binder::Status InstalldNativeService::FsveritySetupAuthToken::authenticate(
+         const ParcelFileDescriptor& authFd, int32_t uid) {
+@@ -963,6 +970,16 @@
+                 return error("Failed to get_path_inode for " + path);
+             }
+             *deDataInode = static_cast<uint64_t>(result);
++        }
++    }
++
++    if ((flags & FLAG_STORAGE_DE) && usesOemRearStorage(uuid, packageName)) {
++        if (seInfo != "platform" && seInfo.compare(0, 9, "platform:") != 0) {
++            return error("OEM rear storage requires platform seinfo");
++        }
++        const auto appDePath = create_data_user_de_package_path(uuid_, userId, pkgname);
++        if (oem_rear::prepare(android_data_dir + "/system", appDePath, userId, uid, previousUid) != 0) {
++            return error("Failed to prepare OEM rear storage for user " + std::to_string(userId));
+         }
+     }
+ 
+@@ -1352,6 +1369,11 @@
+     if (!status.isOk()) {
+         res = status;
+     }
++    if ((flags & FLAG_STORAGE_DE) && usesOemRearStorage(uuid, packageName)
++            && !(flags & (FLAG_CLEAR_CACHE_ONLY | FLAG_CLEAR_CODE_CACHE_ONLY))
++            && oem_rear::clear(android_data_dir + "/system", userId, false) != 0) {
++        res = error("Failed to clear OEM rear storage for user " + std::to_string(userId));
++    }
+     return res;
+ }
+ 
+@@ -1566,6 +1588,10 @@
+     }
+     if (!status.isOk()) {
+         res = status;
++    }
++    if ((flags & FLAG_STORAGE_DE) && usesOemRearStorage(uuid, packageName)
++            && oem_rear::clear(android_data_dir + "/system", userId, true) != 0) {
++        res = error("Failed to clear OEM rear storage for user " + std::to_string(userId));
+     }
+     return res;
+ }
+@@ -2404,6 +2430,11 @@
+             res = error("Failed to delete contents of " + path);
+         }
+     }
++    if ((flags & FLAG_STORAGE_DE) && !uuid
++            && android::base::GetProperty("ro.product.device", "") == "popsicle"
++            && oem_rear::clear(android_data_dir + "/system", userId, true) != 0) {
++        res = error("Failed to remove OEM rear storage for user " + std::to_string(userId));
++    }
+     return res;
+ }
+ 
+--- /dev/null
++++ b/cmds/installd/OemRearStorage.h
+@@ -0,0 +1,215 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#pragma once
++
++#include <android-base/unique_fd.h>
++#include <cutils/multiuser.h>
++#include <private/android_filesystem_config.h>
++#include <selinux/context.h>
++#include <selinux/selinux.h>
++
++#include <errno.h>
++#include <dirent.h>
++#include <fcntl.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include <string>
++#include <memory>
++#include <utility>
++
++namespace android::installd {
++
++// Existing installd implementation traverses children through directory FDs.
++int delete_dir_contents_fd(int dfd, const char* name);
++
++namespace oem_rear {
++
++// UID changes follow the package manager's explicit previous UID. Never take
++// ownership of another app's files, and never follow links while migrating.
++inline int migrateOwnership(int fd, uid_t previousUid, uid_t uid, const char* label = nullptr) {
++    struct stat st {};
++    if (fstat(fd, &st) != 0) return -1;
++    if (st.st_uid != previousUid && st.st_uid != uid) {
++        errno = EPERM;
++        return -1;
++    }
++    const int scanFd = openat(fd, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
++    if (scanFd < 0) return -1;
++    DIR* raw = fdopendir(scanFd);
++    if (raw == nullptr) {
++        close(scanFd);
++        return -1;
++    }
++    std::unique_ptr<DIR, decltype(&closedir)> entries(raw, closedir);
++    for (;;) {
++        errno = 0;
++        dirent* entry = readdir(entries.get());
++        if (entry == nullptr) {
++            if (errno != 0) return -1;
++            break;
++        }
++        const std::string name(entry->d_name);
++        if (name == "." || name == "..") continue;
++        if (fstatat(fd, name.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) return -1;
++        if (st.st_uid != previousUid && st.st_uid != uid) {
++            errno = EPERM;
++            return -1;
++        }
++        if (S_ISDIR(st.st_mode)) {
++            base::unique_fd child(openat(fd, name.c_str(),
++                                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
++            if (child.get() < 0 || migrateOwnership(child.get(), previousUid, uid, label) != 0) {
++                return -1;
++            }
++        } else if (S_ISREG(st.st_mode) || S_ISLNK(st.st_mode)) {
++            if (fchownat(fd, name.c_str(), uid, uid, AT_SYMLINK_NOFOLLOW) != 0) return -1;
++            if (label != nullptr) {
++                // Resolve only the already-open parent; lsetfilecon does not
++                // follow the final component, including symbolic links.
++                const auto path = "/proc/self/fd/" + std::to_string(fd) + "/" + name;
++                if (lsetfilecon(path.c_str(), label) != 0) return -1;
++            }
++        } else {
++            errno = EINVAL;
++            return -1;
++        }
++    }
++    if (fchown(fd, uid, uid) != 0) return -1;
++    return label == nullptr ? 0 : fsetfilecon(fd, label);
++}
++
++// The caller is installd's validated, package/user-locked app-data lifecycle.
++// Parents remain system-owned; only the application subtree is writable by the app.
++inline base::unique_fd prepareDirectory(int parent, const std::string& name, uid_t uid,
++                                        mode_t mode, const char* label,
++                                        uid_t previousUid = static_cast<uid_t>(-1)) {
++    const bool created = mkdirat(parent, name.c_str(), 0700) == 0;
++    if (!created && errno != EEXIST) return {};
++    base::unique_fd fd(openat(parent, name.c_str(),
++                             O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
++    if (fd.get() < 0) return {};
++    struct stat st {};
++    if (fstat(fd.get(), &st) != 0) return {};
++    if (!created && st.st_uid != uid) {
++        if (st.st_uid != previousUid || multiuser_get_app_id(previousUid) < AID_APP_START
++                || multiuser_get_user_id(previousUid) != multiuser_get_user_id(uid)) {
++            errno = EPERM;
++            return {};
++        }
++        if (migrateOwnership(fd.get(), previousUid, uid) != 0) return {};
++    }
++    if (fchown(fd.get(), uid, uid) != 0 || fsetfilecon(fd.get(), label) != 0
++            || fchmod(fd.get(), mode) != 0) {
++        return {};
++    }
++    return fd;
++}
++
++// Copy the actual application's MLS range, rather than constructing categories
++// from a hard-coded UID or assuming user 0. The DE directory already exists.
++inline int prepare(const std::string& systemDataPath, const std::string& appDePath,
++                   userid_t userId, uid_t uid, uid_t previousUid) {
++    base::unique_fd app(open(appDePath.c_str(),
++                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
++    if (app.get() < 0) return -1;
++    struct stat st {};
++    if (fstat(app.get(), &st) != 0) return -1;
++    if (st.st_uid != uid || multiuser_get_user_id(uid) != userId
++            || multiuser_get_app_id(uid) < AID_APP_START) {
++        errno = EPERM;
++        return -1;
++    }
++    char* original = nullptr;
++    if (fgetfilecon(app.get(), &original) < 0) return -1;
++    context_t context = context_new(original);
++    freecon(original);
++    if (context == nullptr) return -1;
++    if (context_type_set(context, "popsicle_rear_theme_data_file") != 0) {
++        context_free(context);
++        return -1;
++    }
++    const char* raw = context_str(context);
++    if (raw == nullptr) {
++        context_free(context);
++        return -1;
++    }
++    const std::string appLabel(raw);
++    context_free(context);
++
++    base::unique_fd system(open(systemDataPath.c_str(),
++                               O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
++    if (system.get() < 0) return -1;
++    if (fstat(system.get(), &st) != 0) return -1;
++    if (st.st_uid != AID_SYSTEM) {
++        errno = EPERM;
++        return -1;
++    }
++    constexpr const char* parentLabel = "u:object_r:popsicle_rear_theme_parent_file:s0";
++    auto theme = prepareDirectory(system.get(), "theme_magic", AID_SYSTEM, 0711, parentLabel);
++    if (theme.get() < 0) return -1;
++    auto users = prepareDirectory(theme.get(), "users", AID_SYSTEM, 0711, parentLabel);
++    if (users.get() < 0) return -1;
++    auto user = prepareDirectory(users.get(), std::to_string(userId), AID_SYSTEM, 0711,
++                                 parentLabel);
++    if (user.get() < 0) return -1;
++    auto rear = prepareDirectory(user.get(), "subscreencenter", uid, 0700, appLabel.c_str(),
++                                 previousUid);
++    if (rear.get() < 0) return -1;
++    // Generic path restorecon cannot infer this user's categories outside the
++    // standard app-data paths. Restore all existing children from actual DE data.
++    return migrateOwnership(rear.get(), uid, uid, appLabel.c_str());
++}
++
++// Used for full DE app-data clear, uninstall and user removal. Cache-only
++// operations must not invoke this: theme/configuration files are user data.
++inline int clear(const std::string& systemDataPath, userid_t userId, bool removeRoot) {
++    base::unique_fd parent(open(systemDataPath.c_str(),
++                               O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
++    if (parent.get() < 0) return errno == ENOENT ? 0 : -1;
++    struct stat st {};
++    const std::string components[] = {"theme_magic", "users", std::to_string(userId)};
++    for (const auto& component : components) {
++        if (fstat(parent.get(), &st) != 0) return -1;
++        if (st.st_uid != AID_SYSTEM) {
++            errno = EPERM;
++            return -1;
++        }
++        base::unique_fd child(openat(parent.get(), component.c_str(),
++                                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
++        if (child.get() < 0) return errno == ENOENT ? 0 : -1;
++        parent = std::move(child);
++    }
++    if (fstat(parent.get(), &st) != 0) return -1;
++    if (st.st_uid != AID_SYSTEM) {
++        errno = EPERM;
++        return -1;
++    }
++    if (fstatat(parent.get(), "subscreencenter", &st, AT_SYMLINK_NOFOLLOW) != 0) {
++        return errno == ENOENT ? 0 : -1;
++    }
++    if (!S_ISDIR(st.st_mode) || multiuser_get_user_id(st.st_uid) != userId
++            || multiuser_get_app_id(st.st_uid) < AID_APP_START) {
++        errno = EPERM;
++        return -1;
++    }
++    if (delete_dir_contents_fd(parent.get(), "subscreencenter") != 0) return -1;
++    return removeRoot ? unlinkat(parent.get(), "subscreencenter", AT_REMOVEDIR) : 0;
++}
++
++}  // namespace oem_rear
++}  // namespace android::installd

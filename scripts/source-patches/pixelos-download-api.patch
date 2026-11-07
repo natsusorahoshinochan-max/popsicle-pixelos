@@ -1,0 +1,54 @@
+diff --git a/core/java/android/app/DownloadManager.java b/core/java/android/app/DownloadManager.java
+index 45ac2f6..6e8941e 100644
+--- a/core/java/android/app/DownloadManager.java
++++ b/core/java/android/app/DownloadManager.java
+@@ -1317,10 +1317,11 @@ public class DownloadManager {
+      * @hide
+      */
+     public int pauseDownload(long id) {
+-        ContentValues values = new ContentValues();
+-        values.put(Downloads.Impl.COLUMN_STATUS, Downloads.Impl.STATUS_PAUSED_MANUAL);
+-
+-        return mResolver.update(ContentUris.withAppendedId(mBaseUri, id), values, null, null);
++        final Uri uri = ContentUris.withAppendedId(mBaseUri, id).buildUpon()
++                .appendQueryParameter(Downloads.Impl.QUERY_PARAMETER_MANUAL_CONTROL,
++                        Downloads.Impl.MANUAL_CONTROL_PAUSE).build();
++        // The provider checks the current state atomically under the existing URI/UID scope.
++        return mResolver.update(uri, new ContentValues(), null, null);
+     }
+ 
+     /**
+@@ -1331,10 +1332,11 @@ public class DownloadManager {
+      * @hide
+      */
+     public int resumeDownload(long id) {
+-        ContentValues values = new ContentValues();
+-        values.put(Downloads.Impl.COLUMN_STATUS, Downloads.Impl.STATUS_RUNNING);
+-
+-        return mResolver.update(ContentUris.withAppendedId(mBaseUri, id), values, null, null);
++        final Uri uri = ContentUris.withAppendedId(mBaseUri, id).buildUpon()
++                .appendQueryParameter(Downloads.Impl.QUERY_PARAMETER_MANUAL_CONTROL,
++                        Downloads.Impl.MANUAL_CONTROL_RESUME).build();
++        // The provider checks the current state atomically under the existing URI/UID scope.
++        return mResolver.update(uri, new ContentValues(), null, null);
+     }
+ 
+     /**
+diff --git a/core/java/android/provider/Downloads.java b/core/java/android/provider/Downloads.java
+index 83fc357..3e6e53a 100644
+--- a/core/java/android/provider/Downloads.java
++++ b/core/java/android/provider/Downloads.java
+@@ -651,6 +651,13 @@ public final class Downloads {
+          */
+         public static final int STATUS_PAUSED_MANUAL = 197;
+ 
++        /** Single-download manual-control operation for ContentResolver.update. @hide */
++        public static final String QUERY_PARAMETER_MANUAL_CONTROL = "manual_control";
++        /** @hide */
++        public static final String MANUAL_CONTROL_PAUSE = "pause";
++        /** @hide */
++        public static final String MANUAL_CONTROL_RESUME = "resume";
++
+         /**
+          * This download couldn't be completed due to insufficient storage
+          * space.  Typically, this is because the SD card is full.

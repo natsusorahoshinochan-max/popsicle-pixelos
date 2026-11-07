@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+external/tinyxml2 33ba115074c80a720826efffab1937d5b355c3b8 0001-vendor-layout.patch

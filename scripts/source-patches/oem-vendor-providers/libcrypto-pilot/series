@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+external/boringssl 0cd1f6a94b670e6b61af95a06e71e690ae8e3262 0001-export-oem-crypto-headers.patch

@@ -1,0 +1,175 @@
+// Private original inputs; generated here by prepare.py, never checked into the source tree.
+package {
+    default_applicable_licenses: ["popsicle_oem_camera_proprietary"],
+}
+
+license {
+    name: "popsicle_oem_camera_proprietary",
+    visibility: [":__subpackages__"],
+    license_kinds: ["legacy_proprietary"],
+}
+
+license {
+    name: "popsicle_oem_cameraopt_notice",
+    visibility: [":__subpackages__"],
+    license_kinds: ["legacy_notice"],
+    license_text: ["NOTICE"],
+}
+
+android_app_import {
+    name: "PopsicleMiuiCamera",
+    apk: "MiuiCamera-pixelos.apk",
+    certificate: "platform",
+    privileged: true,
+    system_ext_specific: true,
+    optional_uses_libs: [
+        "miui-cameraopt",
+        "com.android.extensions.appfunctions",
+        "androidx.window.extensions",
+        "androidx.window.sidecar",
+    ],
+    required: [
+        "miui-cameraopt",
+        "popsicle-camera-privapp-permissions",
+        "popsicle-cameraopt-library",
+        "libcamera_algoup_jni.xiaomi",
+        "libcamera_mianode_jni.xiaomi",
+    ],
+}
+
+dex_import {
+    name: "miui-cameraopt",
+    stem: "miui-cameraopt",
+    jars: ["miui-cameraopt.jar"],
+    provides_uses_lib: "miui-cameraopt",
+    required: [
+        "libcameraopt", "libcameraopt_jni",
+        "popsicle-cameraopt-config", "popsicle-cameraopt-perf-config",
+        "popsicle-cameraopt-reclaim-config", "popsicle-cameraopt-third-party-config",
+        "popsicle-camerascene-config",
+        "popsicle-cameraopt-process-policy",
+    ],
+    system_ext_specific: true,
+    licenses: ["popsicle_oem_cameraopt_notice"],
+}
+
+cc_defaults {
+    name: "popsicle-camera-algorithm-defaults",
+    system_ext_specific: true,
+    compile_multilib: "64",
+    strip: { none: true },
+    check_elf_files: true,
+    stl: "none",
+    shared_libs: [
+        "libbinder", "libcamera_client", "libcamera_metadata", "libcutils",
+        "libgui", "liblog", "libutils", "libvndksupport", "libandroid",
+        "libmedia_jni_utils", "libui", "libc++",
+    ],
+    system_shared_libs: ["libc", "libm", "libdl"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libcamera_algoup_jni.xiaomi",
+    defaults: ["popsicle-camera-algorithm-defaults"],
+    srcs: ["libcamera_algoup_jni.xiaomi.so"],
+    shared_libs: [
+        "libandroid_runtime", "libbase", "libnativehelper", "libnativewindow",
+        "android.hidl.token@1.0-utils",
+    ],
+}
+
+cc_prebuilt_library_shared {
+    name: "libcamera_mianode_jni.xiaomi",
+    defaults: ["popsicle-camera-algorithm-defaults"],
+    srcs: ["libcamera_mianode_jni.xiaomi.so"],
+    shared_libs: ["libxml2"],
+}
+
+prebuilt_etc {
+    name: "popsicle-cameraopt-library",
+    src: "miui-cameraopt.xml",
+    filename_from_src: true,
+    sub_dir: "permissions",
+    system_ext_specific: true,
+}
+
+prebuilt_etc {
+    name: "popsicle-camera-privapp-permissions",
+    src: "privapp-permissions-popsicle-camera.xml",
+    filename_from_src: true,
+    sub_dir: "permissions",
+    system_ext_specific: true,
+}
+
+// Original native implementation used by CameraOpt's Java client and service.
+cc_defaults {
+    name: "popsicle-cameraopt-native-defaults",
+    system_ext_specific: true,
+    compile_multilib: "64",
+    strip: { none: true },
+    check_elf_files: true,
+    stl: "none",
+    shared_libs: [
+        "libutils", "liblog", "libbase", "libcutils", "libbinder",
+        "libprocessgroup", "libcrypto", "libssl", "libc++",
+    ],
+    system_shared_libs: ["libc", "libm", "libdl"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libcameraopt",
+    defaults: ["popsicle-cameraopt-native-defaults"],
+    srcs: ["libcameraopt.so"],
+    shared_libs: [
+        "libbinder_ndk", "libhardware", "libz", "libutilscallstack", "libcamera_metadata",
+    ],
+}
+
+cc_prebuilt_library_shared {
+    name: "libcameraopt_jni",
+    defaults: ["popsicle-cameraopt-native-defaults"],
+    srcs: ["libcameraopt_jni.so"],
+    shared_libs: ["libnativehelper", "libcameraopt", "libmeminfo", "libpsi"],
+}
+
+prebuilt_etc {
+    name: "popsicle-cameraopt-config",
+    src: "cameraopt.json",
+    filename_from_src: true,
+    system_ext_specific: true,
+}
+
+prebuilt_etc {
+    name: "popsicle-cameraopt-perf-config",
+    src: "cameraopt_perf.json",
+    filename_from_src: true,
+    system_ext_specific: true,
+}
+
+prebuilt_etc {
+    name: "popsicle-cameraopt-reclaim-config",
+    src: "cameraopt_reclaim.json",
+    filename_from_src: true,
+    system_ext_specific: true,
+}
+
+prebuilt_etc {
+    name: "popsicle-cameraopt-third-party-config",
+    src: "cameraopt_thirdParty.json",
+    filename_from_src: true,
+    system_ext_specific: true,
+}
+
+prebuilt_etc {
+    name: "popsicle-camerascene-config",
+    src: "camerascene.json",
+    filename_from_src: true,
+    system_ext_specific: true,
+}
+
+prebuilt_etc {
+    name: "popsicle-cameraopt-process-policy",
+    src: "process-policy.json",
+    filename: "popsicle-process-policy.json",
+    system_ext_specific: true,
+}

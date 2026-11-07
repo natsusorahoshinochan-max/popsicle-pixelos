@@ -1,0 +1,75 @@
+--- a/core/java/android/provider/SystemSettings.java
++++ b/core/java/android/provider/SystemSettings.java
+@@ -23,6 +23,12 @@
+  * @hide
+  */
+ public class SystemSettings {
++    /** Secure namespace inherited by the original rear notification settings API. */
++    public static class Secure {
++        public static final String PRIVACY_MODE_ENABLED = "privacy_mode_enabled";
++        public static final String SCREEN_BUTTONS_STATE = "screen_buttons_state";
++    }
++
+     /** Original system-setting namespace; reads retain SettingsProvider behavior. */
+     public static class System {
+         public static final String DARKEN_WALLPAPER_UNDER_DARK_MODE =
+--- a/core/java/android/provider/MiuiSettings.java
++++ b/core/java/android/provider/MiuiSettings.java
+@@ -16,6 +16,8 @@
+ 
+ package android.provider;
+ 
++import android.content.ContentResolver;
++
+ /**
+  * Original inherited system-setting API used by rear MAML.
+  * @hide
+@@ -23,4 +25,16 @@
+ public class MiuiSettings {
+     public static class System extends SystemSettings.System {
+     }
++
++    /** Reads and writes retain the caller and the real SettingsProvider permission checks. */
++    public static class Secure extends SystemSettings.Secure {
++        public static boolean getBoolean(ContentResolver resolver, String name,
++                boolean defValue) {
++            return Settings.Secure.getInt(resolver, name, defValue ? 1 : 0) != 0;
++        }
++
++        public static void putBoolean(ContentResolver resolver, String name, boolean value) {
++            Settings.Secure.putInt(resolver, name, value ? 1 : 0);
++        }
++    }
+ }
+--- /dev/null
++++ b/core/java/miui/os/UserHandleEx.java
+@@ -0,0 +1,29 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package miui.os;
++
++import android.os.UserHandle;
++
++/**
++ * User identity used by the original rear app when loading notification package icons.
++ * @hide
++ */
++public class UserHandleEx {
++    public static UserHandle getUserHandle(int userId) {
++        return new UserHandle(userId);
++    }
++}

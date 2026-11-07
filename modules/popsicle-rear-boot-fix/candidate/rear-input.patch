@@ -1,0 +1,11 @@
+--- a/Android.bp
++++ b/Android.bp
+@@ -11,7 +11,7 @@
+ 
+ android_app_import {
+     name: "PopsicleSubscreenCenter",
+-    apk: "subscreencenter.apk",
++    apk: "subscreencenter-misight.apk",
+     certificate: "platform",
+     system_ext_specific: true,
+     licenses: ["popsicle_oem_rear_proprietary"],

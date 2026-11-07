@@ -1,0 +1,6 @@
+id=popsicle-brightness-curve
+name=Popsicle PixelOS Physical Brightness Curve
+version=0.1
+versionCode=1
+author=PixelOS popsicle bring-up
+description=Production-shaped product RRO restoring matching lux/nits curves for both displays. Disable and reboot to restore. User evaluation pending.

@@ -1,0 +1,845 @@
+diff --git a/Android.bp b/Android.bp
+index c7bdd54..6e64a1e 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -407,6 +407,10 @@ se_versioned_policy {
+ // that non-platform policy targets.
+ se_versioned_policy {
+     name: "plat_pub_versioned.cil",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{plat_pub_versioned.cil}",
++        default: unset,
++    }),
+     base: ":pub_policy.cil",
+     target_policy: ":pub_policy.cil",
+     version: "vendor",
+@@ -447,6 +451,10 @@ se_policy_cil {
+ 
+ se_versioned_policy {
+     name: "vendor_sepolicy.cil",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{vendor_sepolicy.cil}",
++        default: unset,
++    }),
+     base: ":pub_policy.cil",
+     target_policy: ":vendor_sepolicy.unversioned.cil",
+     version: "vendor",
+@@ -491,6 +499,10 @@ se_policy_cil {
+ 
+ se_versioned_policy {
+     name: "odm_sepolicy.cil",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{odm_sepolicy.cil}",
++        default: unset,
++    }),
+     base: ":pub_policy.cil",
+     target_policy: ":odm_sepolicy.unversioned.cil",
+     version: "vendor",
+@@ -573,6 +585,10 @@ prebuilt_etc {
+ 
+ sepolicy_vers {
+     name: "plat_sepolicy_vers.txt",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{plat_sepolicy_vers.txt}",
++        default: unset,
++    }),
+     version: "vendor",
+     vendor: true,
+ }
+@@ -588,7 +604,10 @@ genrule {
+ 
+ prebuilt_etc {
+     name: "genfs_labels_version.txt",
+-    src: ":genfs_labels_version.txt.gen",
++    src: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{genfs_labels_version.txt}",
++        default: ":genfs_labels_version.txt.gen",
++    }),
+     relative_install_path: "selinux",
+     vendor: true,
+ }
+@@ -624,7 +643,10 @@ prebuilt_etc {
+     defaults: ["precompiled_sepolicy_prebuilts"],
+     name: "precompiled_sepolicy.plat_sepolicy_and_mapping.sha256",
+     filename: "precompiled_sepolicy.plat_sepolicy_and_mapping.sha256",
+-    src: ":plat_sepolicy_and_mapping.sha256_gen",
++    src: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{precompiled_sepolicy.plat_sepolicy_and_mapping.sha256}",
++        default: ":plat_sepolicy_and_mapping.sha256_gen",
++    }),
+     relative_install_path: "selinux",
+ }
+ 
+@@ -636,7 +658,10 @@ prebuilt_etc {
+     defaults: ["precompiled_sepolicy_prebuilts"],
+     name: "precompiled_sepolicy.system_ext_sepolicy_and_mapping.sha256",
+     filename: "precompiled_sepolicy.system_ext_sepolicy_and_mapping.sha256",
+-    src: ":system_ext_sepolicy_and_mapping.sha256_gen",
++    src: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{precompiled_sepolicy.system_ext_sepolicy_and_mapping.sha256}",
++        default: ":system_ext_sepolicy_and_mapping.sha256_gen",
++    }),
+     relative_install_path: "selinux",
+ }
+ 
+@@ -648,7 +673,10 @@ prebuilt_etc {
+     defaults: ["precompiled_sepolicy_prebuilts"],
+     name: "precompiled_sepolicy.product_sepolicy_and_mapping.sha256",
+     filename: "precompiled_sepolicy.product_sepolicy_and_mapping.sha256",
+-    src: ":product_sepolicy_and_mapping.sha256_gen",
++    src: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{precompiled_sepolicy.product_sepolicy_and_mapping.sha256}",
++        default: ":product_sepolicy_and_mapping.sha256_gen",
++    }),
+     relative_install_path: "selinux",
+ }
+ 
+@@ -684,15 +712,21 @@ se_policy_binary {
+ 
+ filegroup {
+     name: "precompiled_sepolicy_srcs",
+-    srcs: [":precompiled_sepolicy_without_vendor_srcs"],
+-    device_common_srcs: [
+-        ":plat_pub_versioned.cil",
+-        ":vendor_sepolicy.cil",
+-        ":odm_sepolicy.cil",
+-        ":plat_mapping_file",
+-        ":system_ext_mapping_file",
+-        ":product_mapping_file",
+-    ],
++    srcs: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: [],
++        default: [":precompiled_sepolicy_without_vendor_srcs"],
++    }),
++    device_common_srcs: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: [":popsicle_managed_vendor_policy{strict-inputs.cil}"],
++        default: [
++            ":plat_pub_versioned.cil",
++            ":vendor_sepolicy.cil",
++            ":odm_sepolicy.cil",
++            ":plat_mapping_file",
++            ":system_ext_mapping_file",
++            ":product_mapping_file",
++        ],
++    }),
+     // Make precompiled_sepolicy_srcs as public so that OEMs have access to them.
+     // Useful when some partitions need to be bind mounted across VM boundaries.
+     visibility: ["//visibility:public"],
+@@ -700,6 +734,10 @@ filegroup {
+ 
+ precompiled_se_policy_binary {
+     name: "precompiled_sepolicy",
++    install_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{precompiled_sepolicy}",
++        default: unset,
++    }),
+     srcs: [
+         ":precompiled_sepolicy_srcs",
+     ],
+@@ -907,6 +945,10 @@ se_bug_map {
+ 
+ se_bug_map {
+     name: "vendor_bug_map",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{selinux_denial_metadata}",
++        default: unset,
++    }),
+     srcs: [
+         ":bug_map_files{.vendor}",
+         ":bug_map_files{.plat_vendor}",
+@@ -1410,3 +1452,47 @@ prebuilt_etc {
+     name: "file_contexts.bin",
+     src: ":file_contexts_bin_gen",
+ }
++
++// Selected only for the popsicle OEM cohort. This edge reads official raw
++// inputs and current platform producers; it never reads a vendor image output.
++license {
++    name: "popsicle_managed_oem_policy_license",
++    visibility: [":__subpackages__"],
++    license_kinds: ["legacy_proprietary"],
++}
++
++popsicle_oem_policy {
++    name: "popsicle_managed_vendor_policy",
++    licenses: ["system_sepolicy_license", "popsicle_managed_oem_policy_license"],
++    enabled: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: true,
++        default: false,
++    }),
++    stock_vendor: "vendor/xiaomi/popsicle-private/prebuilt/firmware-a17/vendor.img",
++    stock_odm: "vendor/xiaomi/popsicle-private/prebuilt/firmware-a17/odm.img",
++    codec_source: ":popsicle_qssi_codec_policy_producer",
++    inputs: [
++        { name: "plat", src: ":plat_sepolicy.cil" },
++        { name: "plat-map", src: ":plat_202504.cil" },
++        { name: "plat-compat", src: ":202504.compat.cil" },
++        { name: "system-ext", src: ":system_ext_sepolicy.cil" },
++        { name: "system-ext-map", src: ":system_ext_202504.cil" },
++        { name: "system-ext-compat", src: ":system_ext_202504.compat.cil" },
++        { name: "product", src: ":product_sepolicy.cil" },
++        { name: "product-map", src: ":product_202504.cil" },
++        { name: "genfs", src: ":popsicle_managed_genfs_202504" },
++        { name: "plat-hash", src: ":plat_sepolicy_and_mapping.sha256_gen" },
++        { name: "system-ext-hash", src: ":system_ext_sepolicy_and_mapping.sha256_gen" },
++        { name: "product-hash", src: ":product_sepolicy_and_mapping.sha256_gen" },
++    ],
++}
++
++// prebuilt_etc installs genfs for the device's primary architecture. Resolve
++// that existing producer before the common-architecture policy bundle uses it.
++filegroup {
++    name: "popsicle_managed_genfs_202504",
++    device_first_srcs: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: [":plat_sepolicy_genfs_202504.cil"],
++        default: [],
++    }),
++}
+diff --git a/build/soong/Android.bp b/build/soong/Android.bp
+index 784b37a..f875984 100644
+--- a/build/soong/Android.bp
++++ b/build/soong/Android.bp
+@@ -40,6 +40,7 @@ bootstrap_go_package {
+         "flags.go",
+         "mac_permissions.go",
+         "policy.go",
++        "popsicle_policy.go",
+         "selinux.go",
+         "selinux_contexts.go",
+         "selinux_enc.go",
+diff --git a/build/soong/bug_map.go b/build/soong/bug_map.go
+index 2c92eb6..986eb3b 100644
+--- a/build/soong/bug_map.go
++++ b/build/soong/bug_map.go
+@@ -40,6 +40,8 @@ type bugMap struct {
+ }
+ 
+ type bugMapProperties struct {
++	Verified_prebuilt proptools.Configurable[string] `android:"path"`
++
+ 	// List of source files or se_build_files modules.
+ 	Srcs []string `android:"path"`
+ 
+@@ -61,6 +63,12 @@ func (b *bugMap) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+ 	}
+ 
+ 	srcPaths := b.expandSeSources(ctx)
++	if prebuilt := popsicleVerifiedSource(ctx, "verified_prebuilt", b.properties.Verified_prebuilt); prebuilt != nil {
++		srcPaths = android.Paths{prebuilt}
++	}
++	if ctx.Failed() {
++		return
++	}
+ 	out := android.PathForModuleGen(ctx, b.Name())
+ 	ctx.Build(pctx, android.BuildParams{
+ 		Rule:        android.CatRule,
+diff --git a/build/soong/mac_permissions.go b/build/soong/mac_permissions.go
+index 1df8a51..70ed199 100644
+--- a/build/soong/mac_permissions.go
++++ b/build/soong/mac_permissions.go
+@@ -38,6 +38,8 @@ var (
+ )
+ 
+ type macPermissionsProperties struct {
++	Verified_prebuilt proptools.Configurable[string] `android:"path"`
++
+ 	// keys.conf files to control the mapping of "tags" found in the mac_permissions.xml files.
+ 	Keys []string `android:"path"`
+ 
+@@ -97,6 +99,13 @@ func (m *macPermissionsModule) GenerateAndroidBuildActions(ctx android.ModuleCon
+ 	bluetoothKeys := getAllKeyPaths(ctx, ctx.Config().MainlineBluetoothSepolicyDevCertificatesDir(ctx))
+ 	keys := android.PathsForModuleSrc(ctx, m.properties.Keys)
+ 	srcs := android.PathsForModuleSrc(ctx, m.properties.Srcs)
++	prebuilt := popsicleVerifiedSource(ctx, "verified_prebuilt", m.properties.Verified_prebuilt)
++	if ctx.Failed() {
++		return
++	}
++	if prebuilt != nil {
++		srcs = android.Paths{prebuilt}
++	}
+ 
+ 	m4Keys := android.PathForModuleGen(ctx, "mac_perms_keys.tmp")
+ 	rule := android.NewRuleBuilder(pctx, ctx)
+@@ -124,6 +133,13 @@ func (m *macPermissionsModule) GenerateAndroidBuildActions(ctx android.ModuleCon
+ 
+ 	rule.Build("mac_permission", "build "+m.Name())
+ 
++	if prebuilt != nil {
++		checked := m.outputPath
++		m.outputPath = android.PathForModuleOut(ctx, "oem", m.stem())
++		copyRule := android.NewRuleBuilder(pctx, ctx)
++		copyRule.Command().Text("cp -f").Input(prebuilt).Output(m.outputPath).Implicit(checked)
++		copyRule.Build("preserve_oem_mac_permissions", "Preserve checked OEM MAC permissions")
++	}
+ 	m.installPath = android.PathForModuleInstall(ctx, "etc", "selinux")
+ 	ctx.InstallFile(m.installPath, m.stem(), m.outputPath)
+ }
+diff --git a/build/soong/policy.go b/build/soong/policy.go
+index 97ac079..51ed7d1 100644
+--- a/build/soong/policy.go
++++ b/build/soong/policy.go
+@@ -498,6 +498,9 @@ func (c *policyCil) AndroidMkEntries() []android.AndroidMkEntries {
+ }
+ 
+ type policyBinaryProperties struct {
++	// Preserve an OEM cache for installation while compiling current CIL for tests.
++	Install_prebuilt proptools.Configurable[string] `android:"path"`
++
+ 	// Name of the output. Default is {module_name}
+ 	Stem *string
+ 
+@@ -520,6 +523,8 @@ type policyBinary struct {
+ 
+ 	properties policyBinaryProperties
+ 
++	compiledSource android.Path
++
+ 	installSource android.Path
+ 	installPath   android.InstallPath
+ }
+@@ -550,6 +555,14 @@ func (c *policyBinary) DepsMutator(ctx android.BottomUpMutatorContext) {
+ }
+ 
+ func (c *policyBinary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
++	prebuilt := popsicleVerifiedSource(ctx, "install_prebuilt", c.properties.Install_prebuilt)
++	if ctx.Failed() {
++		return
++	}
++	if prebuilt != nil && proptools.BoolDefault(c.properties.Ignore_neverallow, ctx.Config().SelinuxIgnoreNeverallows()) {
++		ctx.ModuleErrorf("managed policy cannot ignore neverallows")
++		return
++	}
+ 	if len(c.properties.Srcs) == 0 {
+ 		ctx.PropertyErrorf("srcs", "must be specified")
+ 		return
+@@ -624,9 +637,20 @@ func (c *policyBinary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+ 		c.installPath = android.PathForModuleInstall(ctx, "etc", "selinux")
+ 	}
+ 	c.installSource = out
++	if prebuilt != nil {
++		// Depend on the new strict compilation, but retain every byte of the OEM
++		// installed cache. Actual platform hash mismatch selects init's fallback.
++		installed := pathForModuleOut(ctx, "oem-cache", c.stem())
++		copyRule := android.NewRuleBuilder(pctx, ctx)
++		copyRule.Command().Text("cp -f").Input(prebuilt).Output(installed).Implicit(out)
++		copyRule.Build("preserve_oem_cache", "Preserve OEM cache after strict policy compilation")
++		c.installSource = installed
++	}
+ 	ctx.InstallFile(c.installPath, c.stem(), c.installSource)
+ 
+-	ctx.SetOutputFiles(android.Paths{c.installSource}, "")
++	// Policy tests must inspect the actual newly compiled combination.
++	c.compiledSource = out
++	ctx.SetOutputFiles(android.Paths{out}, "")
+ 
+ 	moduleInfoJSON := ctx.ModuleInfoJSON()
+ 	moduleInfoJSON.Class = []string{"ETC"}
+@@ -639,6 +663,9 @@ func (c *policyBinary) AndroidMkEntries() []android.AndroidMkEntries {
+ 		Class:      "ETC",
+ 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
+ 			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
++				if c.Name() == "precompiled_sepolicy" {
++					entries.SetPath("SOONG_COMPILED_PRECOMPILED_SEPOLICY", c.compiledSource)
++				}
+ 				entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", !c.Installable())
+ 				entries.SetPath("LOCAL_MODULE_PATH", c.installPath)
+ 				entries.SetString("LOCAL_INSTALLED_MODULE_STEM", c.stem())
+diff --git a/build/soong/popsicle_policy.go b/build/soong/popsicle_policy.go
+new file mode 100644
+index 0000000..74d8de6
+--- /dev/null
++++ b/build/soong/popsicle_policy.go
+@@ -0,0 +1,158 @@
++// SPDX-License-Identifier: Apache-2.0
++package selinux
++
++import (
++	"android/soong/android"
++	"github.com/google/blueprint/proptools"
++)
++
++func init() {
++	android.RegisterModuleType("popsicle_oem_policy", popsiclePolicyFactory)
++}
++
++// The source-root raw images are private, byte-verified copies of the official
++// inputs. No generated vendor image or installed vendor policy is a dependency.
++type popsiclePolicyProperties struct {
++	Stock_vendor *string
++	Stock_odm    *string
++	Codec_source *string `android:"path"`
++	Inputs       []struct {
++		Name string
++		Src  string `android:"path"`
++	}
++}
++
++type popsiclePolicy struct {
++	android.ModuleBase
++	properties popsiclePolicyProperties
++}
++
++func popsiclePolicyFactory() android.Module {
++	m := &popsiclePolicy{}
++	m.AddProperties(&m.properties)
++	android.InitAndroidArchModule(m, android.DeviceSupported, android.MultilibCommon)
++	return m
++}
++
++func (m *popsiclePolicy) DepsMutator(ctx android.BottomUpMutatorContext) {
++	ctx.AddHostToolDependencies("popsicle_derive_vendor", "popsicle_erofs_readback", "secilc")
++}
++
++var popsiclePolicyInputNames = []string{
++	"plat", "plat-map", "plat-compat", "system-ext", "system-ext-map",
++	"system-ext-compat", "product", "product-map", "genfs",
++	"plat-hash", "system-ext-hash", "product-hash",
++}
++
++var popsiclePolicyOutputNames = []string{
++	"vendor_sepolicy.cil",
++	"plat_pub_versioned.cil",
++	"strict-inputs.cil",
++	"strict-policy",
++	"plat_sepolicy_vers.txt",
++	"genfs_labels_version.txt",
++	"selinux_denial_metadata",
++	"vendor_file_contexts",
++	"vendor_hwservice_contexts",
++	"vendor_keystore2_key_contexts",
++	"vendor_mac_permissions.xml",
++	"vendor_property_contexts",
++	"vendor_seapp_contexts",
++	"vendor_service_contexts",
++	"vendor_tee_service_contexts",
++	"vndservice_contexts",
++	"odm_sepolicy.cil",
++	"odm_file_contexts",
++	"odm_hwservice_contexts",
++	"odm_mac_permissions.xml",
++	"odm_property_contexts",
++	"odm_seapp_contexts",
++	"odm_service_contexts",
++	"precompiled_sepolicy",
++	"precompiled_sepolicy.plat_sepolicy_and_mapping.sha256",
++	"precompiled_sepolicy.system_ext_sepolicy_and_mapping.sha256",
++	"precompiled_sepolicy.product_sepolicy_and_mapping.sha256",
++}
++
++func (m *popsiclePolicy) GenerateAndroidBuildActions(ctx android.ModuleContext) {
++	if !ctx.Config().VendorConfig("popsicle").Bool("managed_vendor_policy") ||
++		ctx.Config().Eng() || ctx.Config().SelinuxIgnoreNeverallows() {
++		ctx.ModuleErrorf("managed OEM policy requires explicit user/userdebug opt-in and strict neverallows")
++		return
++	}
++	for _, entry := range []struct{ property, value, expected string }{
++		{"stock_vendor", proptools.String(m.properties.Stock_vendor), "vendor/xiaomi/popsicle-private/prebuilt/firmware-a17/vendor.img"},
++		{"stock_odm", proptools.String(m.properties.Stock_odm), "vendor/xiaomi/popsicle-private/prebuilt/firmware-a17/odm.img"},
++	} {
++		if entry.value != entry.expected {
++			ctx.PropertyErrorf(entry.property, "must select the declared official private image")
++			return
++		}
++	}
++	inputs := make(map[string]android.Path)
++	for _, input := range m.properties.Inputs {
++		if !android.InList(input.Name, popsiclePolicyInputNames) || inputs[input.Name] != nil {
++			ctx.PropertyErrorf("inputs", "unknown or duplicate policy input %q", input.Name)
++			return
++		}
++		inputs[input.Name] = android.PathForModuleSrc(ctx, input.Src)
++	}
++	if len(inputs) != len(popsiclePolicyInputNames) {
++		ctx.PropertyErrorf("inputs", "the complete platform, mapping, compat and hash contract is required")
++		return
++	}
++	root := pathForModuleOut(ctx, "policy")
++	workspace := pathForModuleOut(ctx, "work")
++	rule := android.NewRuleBuilder(pctx, ctx)
++	rule.SandboxDisabled()
++	rule.Command().Text("mkdir -p").Text(workspace.String()).Text(pathForModuleOut(ctx).String())
++	variant := "user"
++	if ctx.Config().Debuggable() {
++		variant = "userdebug"
++	}
++	cmd := rule.Command().BuiltTool("popsicle_derive_vendor").Text("policy").
++		FlagWithArg("--build-variant ", variant).
++		Flag("--reader").BuiltTool("popsicle_erofs_readback").
++		FlagWithInput("--stock ", android.PathForSource(ctx, *m.properties.Stock_vendor)).
++		FlagWithArg("--output ", root.String()).
++		FlagWithArg("--policy-input workspace=", workspace.String()).
++		FlagWithInput("--policy-input odm-stock=", android.PathForSource(ctx, *m.properties.Stock_odm)).
++		FlagWithInput("--policy-input secilc=", ctx.Config().HostToolPath(ctx, "secilc")).
++		FlagWithInput("--policy-input m4=", ctx.Config().PrebuiltBuildTool(ctx, "m4")).
++		FlagWithInput("--policy-input macros=", android.PathForSource(ctx, "system/sepolicy/public/te_macros")).
++		FlagWithInput("--policy-input global-macros=", android.PathForSource(ctx, "system/sepolicy/public/global_macros")).
++		FlagWithInput("--policy-input codec-source=", android.PathForModuleSrc(ctx, proptools.String(m.properties.Codec_source)))
++	for _, name := range popsiclePolicyInputNames {
++		cmd.FlagWithInput("--policy-input "+name+"=", inputs[name])
++	}
++	for _, name := range popsiclePolicyOutputNames {
++		out := root.Join(ctx, name)
++		cmd.ImplicitOutput(out)
++		ctx.SetOutputFiles(android.Paths{out}, name)
++	}
++	rule.Build("managed_oem_policy", "Derive and strictly compile complete OEM policy")
++}
++
++// These properties select a proven bundle output without accepting arbitrary
++// replacement CIL. Other products retain their existing generation rules.
++func popsicleVerifiedSource(ctx android.ModuleContext, property string,
++	value proptools.Configurable[string]) android.Path {
++	source := value.GetOrDefault(ctx, "")
++	if source == "" {
++		return nil
++	}
++	name := ctx.ModuleName()
++	if name == "vendor_bug_map" {
++		name = "selinux_denial_metadata"
++	}
++	if !android.InList(name, popsiclePolicyOutputNames) {
++		ctx.PropertyErrorf(property, "unsupported managed OEM policy consumer")
++		return nil
++	}
++	expected := ":popsicle_managed_vendor_policy{" + name + "}"
++	if !ctx.Config().VendorConfig("popsicle").Bool("managed_vendor_policy") || source != expected {
++		ctx.PropertyErrorf(property, "must select the matching verified OEM policy bundle output")
++		return nil
++	}
++	return android.PathForModuleSrc(ctx, source)
++}
+diff --git a/build/soong/selinux_contexts.go b/build/soong/selinux_contexts.go
+index ffaff09..e9f7fe2 100644
+--- a/build/soong/selinux_contexts.go
++++ b/build/soong/selinux_contexts.go
+@@ -26,6 +26,9 @@ import (
+ )
+ 
+ type selinuxContextsProperties struct {
++	// Use the exact raw OEM file after the existing context checks succeed.
++	Verified_prebuilt proptools.Configurable[string] `android:"path"`
++
+ 	// Filenames under sepolicy directories, which will be used to generate contexts file.
+ 	Srcs []string `android:"path"`
+ 
+@@ -155,10 +158,24 @@ func (m *selinuxContextsModule) GenerateAndroidBuildActions(ctx android.ModuleCo
+ 		return
+ 	}
+ 
+-	builtContext := m.build(ctx, android.PathsForModuleSrc(ctx, m.properties.Srcs))
++	prebuilt := popsicleVerifiedSource(ctx, "verified_prebuilt", m.properties.Verified_prebuilt)
++	if ctx.Failed() {
++		return
++	}
++	inputs := android.PathsForModuleSrc(ctx, m.properties.Srcs)
++	if prebuilt != nil {
++		inputs = android.Paths{prebuilt}
++	}
++	builtContext := m.build(ctx, inputs)
+ 
+ 	outputPath := pathForModuleOut(ctx, m.stem())
+-	android.CopyFileRule(ctx, builtContext, outputPath)
++	if prebuilt == nil {
++		android.CopyFileRule(ctx, builtContext, outputPath)
++	} else {
++		rule := android.NewRuleBuilder(pctx, ctx)
++		rule.Command().Text("cp -f").Input(prebuilt).Output(outputPath).Implicit(builtContext)
++		rule.Build("preserve_oem_context", "Preserve checked OEM contexts")
++	}
+ 	ctx.InstallFile(m.installPath, m.stem(), outputPath)
+ 	m.outputPath = outputPath
+ 
+diff --git a/build/soong/sepolicy_vers.go b/build/soong/sepolicy_vers.go
+index 894a3ef..1a48ed1 100644
+--- a/build/soong/sepolicy_vers.go
++++ b/build/soong/sepolicy_vers.go
+@@ -47,6 +47,9 @@ type sepolicyVersProperties struct {
+ 	// Output file name. Defaults to module name if unspecified.
+ 	Stem *string
+ 
++	// Select only the matching producer-verified OEM bundle output.
++	Verified_prebuilt proptools.Configurable[string] `android:"path"`
++
+ 	// Whether this module is directly installable to one of the partitions. Default is true
+ 	Installable *bool
+ }
+@@ -64,6 +67,13 @@ func (v *sepolicyVers) DepsMutator(ctx android.BottomUpMutatorContext) {
+ }
+ 
+ func (v *sepolicyVers) GenerateAndroidBuildActions(ctx android.ModuleContext) {
++	if source := popsicleVerifiedSource(ctx, "verified_prebuilt", v.properties.Verified_prebuilt); source != nil {
++		v.install(ctx, source)
++		return
++	}
++	if ctx.Failed() {
++		return
++	}
+ 	var ver string
+ 	switch proptools.String(v.properties.Version) {
+ 	case "platform":
+@@ -80,12 +90,16 @@ func (v *sepolicyVers) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+ 	rule.Command().Text("echo").Text(ver).Text(">").Output(out)
+ 	rule.Build("sepolicy_vers", v.Name())
+ 
++	v.install(ctx, out)
++}
++
++func (v *sepolicyVers) install(ctx android.ModuleContext, source android.Path) {
+ 	if !v.installable() {
+ 		v.SkipInstall()
+ 	}
+ 
+ 	v.installPath = android.PathForModuleInstall(ctx, "etc", "selinux")
+-	v.installSource = out
++	v.installSource = source
+ 	ctx.InstallFile(v.installPath, v.stem(), v.installSource)
+ 
+ 	ctx.SetOutputFiles(android.Paths{v.installSource}, "")
+diff --git a/build/soong/versioned_policy.go b/build/soong/versioned_policy.go
+index 0bab72a..28de1d5 100644
+--- a/build/soong/versioned_policy.go
++++ b/build/soong/versioned_policy.go
+@@ -51,6 +51,9 @@ type versionedPolicyProperties struct {
+ 	// file can be merged with specified cil files or not.
+ 	Dependent_cils []string `android:"path"`
+ 
++	// Select only the matching producer-verified OEM bundle output.
++	Verified_prebuilt proptools.Configurable[string] `android:"path"`
++
+ 	// Whether this module is directly installable to one of the partitions. Default is true
+ 	Installable *bool
+ 
+@@ -92,6 +95,13 @@ func (m *versionedPolicy) DepsMutator(ctx android.BottomUpMutatorContext) {
+ }
+ 
+ func (m *versionedPolicy) GenerateAndroidBuildActions(ctx android.ModuleContext) {
++	if source := popsicleVerifiedSource(ctx, "verified_prebuilt", m.properties.Verified_prebuilt); source != nil {
++		m.install(ctx, source)
++		return
++	}
++	if ctx.Failed() {
++		return
++	}
+ 	version := proptools.StringDefault(m.properties.Version, "current")
+ 	if version == "current" {
+ 		version = ctx.DeviceConfig().PlatformSepolicyVersion()
+@@ -186,11 +196,15 @@ func (m *versionedPolicy) GenerateAndroidBuildActions(ctx android.ModuleContext)
+ 
+ 	rule.Build("mapping", "Versioning mapping file "+ctx.ModuleName())
+ 
++	m.install(ctx, out)
++}
++
++func (m *versionedPolicy) install(ctx android.ModuleContext, source android.Path) {
+ 	if !m.installable() {
+ 		m.SkipInstall()
+ 	}
+ 
+-	m.installSource = out
++	m.installSource = source
+ 	m.installPath = android.PathForModuleInstall(ctx, "etc", "selinux")
+ 	if subdir := proptools.String(m.properties.Relative_install_path); subdir != "" {
+ 		m.installPath = m.installPath.Join(ctx, subdir)
+diff --git a/contexts/Android.bp b/contexts/Android.bp
+index 842e318..fbf987b 100644
+--- a/contexts/Android.bp
++++ b/contexts/Android.bp
+@@ -110,6 +110,10 @@ file_contexts {
+ 
+ file_contexts {
+     name: "vendor_file_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{vendor_file_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [
+         ":file_contexts_files{.plat_vendor}",
+@@ -163,6 +167,10 @@ file_contexts {
+ 
+ file_contexts {
+     name: "odm_file_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{odm_file_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [":file_contexts_files{.odm}"],
+     device_specific: true,
+@@ -200,6 +208,10 @@ hwservice_contexts {
+ 
+ hwservice_contexts {
+     name: "vendor_hwservice_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{vendor_hwservice_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [
+         ":hwservice_contexts_files{.plat_vendor}",
+@@ -211,6 +223,10 @@ hwservice_contexts {
+ 
+ hwservice_contexts {
+     name: "odm_hwservice_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{odm_hwservice_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [":hwservice_contexts_files{.odm}"],
+     device_specific: true,
+@@ -274,6 +290,10 @@ property_contexts {
+ 
+ property_contexts {
+     name: "vendor_property_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{vendor_property_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [
+         ":property_contexts_files{.plat_vendor}",
+@@ -297,6 +317,10 @@ property_contexts {
+ 
+ property_contexts {
+     name: "odm_property_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{odm_property_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [":property_contexts_files{.odm}"],
+     device_specific: true,
+@@ -356,6 +380,10 @@ service_contexts {
+ 
+ service_contexts {
+     name: "vendor_service_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{vendor_service_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [
+         ":service_contexts_files{.plat_vendor}",
+@@ -379,6 +407,10 @@ service_contexts {
+ 
+ service_contexts {
+     name: "odm_service_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{odm_service_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [
+         ":service_contexts_files{.odm}",
+@@ -421,6 +453,10 @@ keystore2_key_contexts {
+ 
+ keystore2_key_contexts {
+     name: "vendor_keystore2_key_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{vendor_keystore2_key_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [
+         ":keystore2_key_contexts_files{.plat_vendor}",
+@@ -469,6 +505,10 @@ seapp_contexts {
+ 
+ seapp_contexts {
+     name: "vendor_seapp_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{vendor_seapp_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [
+         ":seapp_contexts_files{.plat_vendor}",
+@@ -486,6 +526,10 @@ seapp_contexts {
+ 
+ seapp_contexts {
+     name: "odm_seapp_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{odm_seapp_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [
+         ":seapp_contexts_files{.odm}",
+@@ -501,6 +545,10 @@ seapp_contexts {
+ 
+ vndservice_contexts {
+     name: "vndservice_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{vndservice_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [
+         ":vndservice_contexts_files{.plat_vendor}",
+@@ -713,6 +761,10 @@ tee_service_contexts {
+ 
+ tee_service_contexts {
+     name: "vendor_tee_service_contexts",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{vendor_tee_service_contexts}",
++        default: unset,
++    }),
+     defaults: ["contexts_flags_defaults"],
+     srcs: [
+         ":tee_service_contexts_files{.plat_vendor}",
+diff --git a/mac_permissions/Android.bp b/mac_permissions/Android.bp
+index 16132c6..b5a8d67 100644
+--- a/mac_permissions/Android.bp
++++ b/mac_permissions/Android.bp
+@@ -71,6 +71,10 @@ mac_permissions {
+ 
+ mac_permissions {
+     name: "vendor_mac_permissions.xml",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{vendor_mac_permissions.xml}",
++        default: unset,
++    }),
+     keys: [
+         ":keys.conf{.plat_vendor}",
+         ":keys.conf{.vendor}",
+@@ -86,6 +90,10 @@ mac_permissions {
+ 
+ mac_permissions {
+     name: "odm_mac_permissions.xml",
++    verified_prebuilt: select(soong_config_variable("popsicle", "managed_vendor_policy"), {
++        true: ":popsicle_managed_vendor_policy{odm_mac_permissions.xml}",
++        default: unset,
++    }),
+     keys: [
+         ":keys.conf{.odm}",
+         ":keys.conf{.reqd_mask}",
+diff --git a/tests/sepolicy_tests.py b/tests/sepolicy_tests.py
+index 690e884..986655f 100644
+--- a/tests/sepolicy_tests.py
++++ b/tests/sepolicy_tests.py
+@@ -286,8 +286,8 @@ def TestIsolatedAttributeConsistency(test_policy):
+         # extra types being granted to isolated_compute_app
+         "vendor_sysfs_public": ["file", "dir", "lnk_file"],
+         "vendor_sysfs_soc": ["dir"],
+-        "vendor_hal_dspmanager": ["binder", "fd"],
+-        "vendor_dspservice": ["binder", "fd"],
++        "vendor_hal_dspmanager": ["binder", "fd", "memfd_file"],
++        "vendor_dspservice": ["binder", "fd", "memfd_file"],
+         "isolated_compute_allowed": ["service_manager", "chr_file", "file", "dir", "lnk_file", "fd", "binder"],
+     }
+ 
+@@ -332,6 +332,14 @@ def TestIsolatedAttributeConsistency(test_policy):
+         for perm in permissions:
+             tctx, tclass, p = perm.split(":")
+             tctx = resolveHalServerSubtype(tctx)
++            # hal_client_domain grants the same anonymous shared-memory IPC
++            # contract to the already admitted DSP clients. Keep this bounded
++            # to the macro's four permissions; do not allow open or execute.
++            if (tctx in {"vendor_hal_dspmanager", "vendor_dspservice"}
++                    and tclass == "memfd_file"
++                    and p not in {"read", "write", "getattr", "map"}):
++                violated_permissions += [perm]
++                continue
+             # check unwanted permissions
+             if not checkIsolatedComputeAllowed(tctx, tclass) and (
+                 tctx not in permissionAllowList

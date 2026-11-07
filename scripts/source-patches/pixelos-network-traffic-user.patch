@@ -1,0 +1,69 @@
+--- a/core/java/com/android/internal/statusbar/NetworkTraffic.java
++++ b/core/java/com/android/internal/statusbar/NetworkTraffic.java
+@@ -5,8 +5,12 @@
+ 
+ package com.android.internal.statusbar;
+ 
++import android.app.ActivityManager;
++import android.content.BroadcastReceiver;
+ import android.content.ContentResolver;
+ import android.content.Context;
++import android.content.Intent;
++import android.content.IntentFilter;
+ import android.content.res.Resources;
+ import android.database.ContentObserver;
+ import android.graphics.Color;
+@@ -361,6 +365,15 @@
+                 }
+             };
+ 
++    private final BroadcastReceiver mUserSwitchReceiver = new BroadcastReceiver() {
++        @Override
++        public void onReceive(Context context, Intent intent) {
++            if (Intent.ACTION_USER_SWITCHED.equals(intent.getAction()) && isAttachedToWindow()) {
++                updateSettings();
++            }
++        }
++    };
++
+     @Override
+     protected void onAttachedToWindow() {
+         super.onAttachedToWindow();
+@@ -369,6 +382,9 @@
+         manager.addDarkReceiver(mDarkReceiver);
+         manager.addVisibilityReceiver(mVisibilityReceiver);
+ 
++        mContext.registerReceiverAsUser(mUserSwitchReceiver, UserHandle.ALL,
++                new IntentFilter(Intent.ACTION_USER_SWITCHED), null, mTrafficHandler,
++                Context.RECEIVER_EXPORTED);
+         mObserver.observe();
+         updateSettings();
+     }
+@@ -377,6 +393,7 @@
+     protected void onDetachedFromWindow() {
+         super.onDetachedFromWindow();
+         mObserver.unobserve();
++        mContext.unregisterReceiver(mUserSwitchReceiver);
+         unregisterNetworkCallbacks();
+     }
+ 
+@@ -415,11 +432,14 @@
+     private void updateSettings() {
+         ContentResolver resolver = mContext.getContentResolver();
+ 
+-        mMode = Settings.Secure.getInt(resolver, Settings.Secure.NETWORK_TRAFFIC_MODE, 0);
+-        mAutoHide =
+-                Settings.Secure.getInt(resolver, Settings.Secure.NETWORK_TRAFFIC_AUTOHIDE, 0) == 1;
+-        mUnits = Settings.Secure.getInt(
+-                resolver, Settings.Secure.NETWORK_TRAFFIC_UNITS, UNITS_KILOBYTES);
++        // SystemUI's context belongs to its process user, not necessarily the foreground user.
++        final int userId = ActivityManager.getCurrentUser();
++        mMode = Settings.Secure.getIntForUser(
++                resolver, Settings.Secure.NETWORK_TRAFFIC_MODE, 0, userId);
++        mAutoHide = Settings.Secure.getIntForUser(
++                resolver, Settings.Secure.NETWORK_TRAFFIC_AUTOHIDE, 0, userId) == 1;
++        mUnits = Settings.Secure.getIntForUser(
++                resolver, Settings.Secure.NETWORK_TRAFFIC_UNITS, UNITS_KILOBYTES, userId);
+ 
+         manageNetworkCallbacks();
+ 

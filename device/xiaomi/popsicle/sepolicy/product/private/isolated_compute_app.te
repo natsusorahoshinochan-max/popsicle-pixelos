@@ -1,0 +1,6 @@
+# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+
+# The OEM service is an isolated_compute_allowed_service. Register its actual
+# framework client so service discovery and the DSP Binder contract agree.
+hal_client_domain(isolated_compute_app, vendor_hal_dspmanager)

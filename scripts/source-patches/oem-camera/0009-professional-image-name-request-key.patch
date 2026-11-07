@@ -1,0 +1,12 @@
+diff --git a/core/java/android/hardware/camera2/PopsicleCameraMetadataCompat.java b/core/java/android/hardware/camera2/PopsicleCameraMetadataCompat.java
+--- a/core/java/android/hardware/camera2/PopsicleCameraMetadataCompat.java
++++ b/core/java/android/hardware/camera2/PopsicleCameraMetadataCompat.java
+@@ -32,7 +32,7 @@
+     static void apply(String device, String packageName, String cameraId,
+             CameraMetadataNative metadata) {
+         if (!"popsicle".equals(device) || !"com.android.camera".equals(packageName)
+-                || !"5".equals(cameraId)) {
++                || !("5".equals(cameraId) || "2".equals(cameraId))) {
+             return;
+         }
+         int[] advertised = metadata.get(CameraCharacteristics.REQUEST_AVAILABLE_REQUEST_KEYS);

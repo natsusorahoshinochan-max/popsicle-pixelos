@@ -1,0 +1,158 @@
+diff --git a/services/core/java/com/android/server/display/AutomaticBrightnessController.java b/services/core/java/com/android/server/display/AutomaticBrightnessController.java
+--- a/services/core/java/com/android/server/display/AutomaticBrightnessController.java
++++ b/services/core/java/com/android/server/display/AutomaticBrightnessController.java
+@@ -188,6 +188,14 @@
+ 
+     // The time when the light sensor was enabled.
+     private long mLightSensorEnableTime;
++    private long mLightSensorEnableElapsedTime;
++    private static final long STARTUP_SAMPLE_MAX_AGE_MILLIS = 1000;
++    private static final long STARTUP_CORRECTION_WINDOW_MILLIS = 2000;
++    private boolean mAwaitingStartupSample;
++    private boolean mStartupLuxCorrection;
++    private boolean mStartupBrightnessPending;
++    private final Runnable mExpireStartupSample = () -> mAwaitingStartupSample = false;
++
+ 
+     // The currently accepted nominal ambient light level.
+     private float mAmbientLux = INVALID_LUX;
+@@ -506,6 +514,13 @@
+         }
+     }
+ 
++    /** Consume only when the automatic strategy actually applies the corrected target. */
++    public boolean consumeStartupBrightnessCorrection() {
++        final boolean pending = mStartupBrightnessPending;
++        mStartupBrightnessPending = false;
++        return pending;
++    }
++
+     public void stop() {
+         setLightSensorEnabled(false);
+     }
+@@ -689,6 +704,8 @@
+         ipw.println("mDisplayPolicy=" + DisplayPowerRequest.policyToString(mDisplayPolicy));
+         ipw.println("mShortTermModel=");
+ 
++        ipw.println("mAwaitingStartupSample=" + mAwaitingStartupSample);
++        ipw.println("mStartupBrightnessPending=" + mStartupBrightnessPending);
+         mShortTermModel.dump(ipw);
+         ipw.println("mPausedShortTermModel=");
+         mPausedShortTermModel.dump(ipw);
+@@ -746,6 +763,7 @@
+             if (!mLightSensorEnabled) {
+                 mLightSensorEnabled = true;
+                 mLightSensorEnableTime = mClock.uptimeMillis();
++                mLightSensorEnableElapsedTime = mClock.getSensorEventScaleTime();
+                 mCurrentLightSensorRate = mInitialLightSensorRate;
+                 registerForegroundAppUpdater();
+                 mSensorManager.registerListener(mLightSensorListener, mLightSensor,
+@@ -754,6 +772,10 @@
+             }
+         } else if (mLightSensorEnabled) {
+             mLightSensorEnabled = false;
++            mAwaitingStartupSample = false;
++            mStartupLuxCorrection = false;
++            mStartupBrightnessPending = false;
++            mHandler.removeCallbacks(mExpireStartupSample);
+             mAmbientLuxValid = !mResetAmbientLuxAfterWarmUpConfig;
+             if (!mAmbientLuxValid) {
+                 mPreThresholdLux = INVALID_LUX;
+@@ -773,13 +795,47 @@
+ 
+     private void handleLightSensorEvent(long time, float lux) {
+         Trace.traceCounter(Trace.TRACE_TAG_POWER, "ALS", (int) lux);
+-        mHandler.removeMessages(MSG_UPDATE_AMBIENT_LUX);
+-
++        final long eventTime = time;
++        final long now = mClock.getSensorEventScaleTime();
++        if (mAmbientLightRingBuffer.size() == 0 && !mAmbientLuxValid
++                && time < mLightSensorEnableElapsedTime - STARTUP_SAMPLE_MAX_AGE_MILLIS) {
++            // On-change sensors may replay a cached value when another client keeps them active.
++            // It is a usable fallback, but not a whole horizon of observations in this session.
++            mAwaitingStartupSample = mClock.uptimeMillis() - mLightSensorEnableTime
++                    < STARTUP_CORRECTION_WINDOW_MILLIS;
++            if (mAwaitingStartupSample) {
++                mHandler.postAtTime(mExpireStartupSample,
++                        mLightSensorEnableTime + STARTUP_CORRECTION_WINDOW_MILLIS);
++            }
++            time = now;
++        } else if (mAwaitingStartupSample) {
++            if (mClock.uptimeMillis() - mLightSensorEnableTime
++                    >= STARTUP_CORRECTION_WINDOW_MILLIS) {
++                mAwaitingStartupSample = false;
++            } else if (time >= mLightSensorEnableElapsedTime
++                    && now - time <= STARTUP_SAMPLE_MAX_AGE_MILLIS
++                    && time > mAmbientLightRingBuffer.getTime(
++                            mAmbientLightRingBuffer.size() - 1)) {
++                mAwaitingStartupSample = false;
++                mStartupLuxCorrection = true;
++                mAmbientLightRingBuffer.clear();
++                mAmbientLuxValid = false;
++                mRecentLightSamples = 0;
++                mHandler.removeCallbacks(mExpireStartupSample);
++            }
++        }
++        // Ignore replayed/out-of-order events rather than moving the history backwards.
++        if (mAmbientLightRingBuffer.size() > 0
++                && time < mAmbientLightRingBuffer.getTime(mAmbientLightRingBuffer.size() - 1)) {
++            return;
++        }
+         if (mAmbientLightRingBuffer.size() == 0) {
+             // switch to using the steady-state sample rate after grabbing the initial light sample
+             adjustLightSensorRate(mNormalLightSensorRate);
+         }
++        mHandler.removeMessages(MSG_UPDATE_AMBIENT_LUX);
+         applyLightSensorMeasurement(time, lux);
++        mLastObservedLuxTime = eventTime;
+         updateAmbientLux(time);
+     }
+ 
+@@ -940,7 +996,7 @@
+         if (!mAmbientLuxValid) {
+             final long timeWhenSensorWarmedUp =
+                 mLightSensorWarmUpTimeConfig + mLightSensorEnableTime;
+-            if (time < timeWhenSensorWarmedUp) {
++            if (mClock.uptimeMillis() < timeWhenSensorWarmedUp) {
+                 if (mLoggingEnabled) {
+                     Slog.d(TAG, "updateAmbientLux: Sensor not ready yet: "
+                             + "time=" + time + ", "
+@@ -1039,7 +1095,8 @@
+                 && newScreenAutoBrightness > mScreenDarkeningThreshold
+                 && newScreenAutoBrightness < mScreenBrighteningThreshold;
+ 
+-        if (withinThreshold && !isManuallySet && currentBrightnessWithinAllowedRange) {
++        if (withinThreshold && !isManuallySet && !mStartupLuxCorrection
++                && currentBrightnessWithinAllowedRange) {
+             if (mLoggingEnabled) {
+                 Slog.d(TAG, "ignoring newScreenAutoBrightness: "
+                         + mScreenDarkeningThreshold + " < " + newScreenAutoBrightness
+@@ -1057,6 +1114,10 @@
+         if (!withinThreshold) {
+             mPreThresholdBrightness = mScreenAutoBrightness;
+         }
++        if (!BrightnessSynchronizer.floatEquals(mScreenAutoBrightness, newScreenAutoBrightness)) {
++            mStartupBrightnessPending = mStartupLuxCorrection;
++        }
++        mStartupLuxCorrection = false;
+         mScreenAutoBrightness = newScreenAutoBrightness;
+         if (isInIdleMode()) {
+             mScreenBrighteningThreshold = clampScreenBrightness(
+diff --git a/services/core/java/com/android/server/display/brightness/strategy/AutomaticBrightnessStrategy.java b/services/core/java/com/android/server/display/brightness/strategy/AutomaticBrightnessStrategy.java
+--- a/services/core/java/com/android/server/display/brightness/strategy/AutomaticBrightnessStrategy.java
++++ b/services/core/java/com/android/server/display/brightness/strategy/AutomaticBrightnessStrategy.java
+@@ -339,11 +339,13 @@
+                 !BrightnessSynchronizer.floatEquals(
+                         brightness, strategyExecutionRequest.getCurrentScreenBrightness())
+                 && !mIsAutoBrightnessOverriddenInDoze;
++        final boolean startupCorrection = mAutomaticBrightnessController != null
++                && mAutomaticBrightnessController.consumeStartupBrightnessCorrection();
+         return new DisplayBrightnessState.Builder()
+                 .setBrightness(brightness)
+                 .setBrightnessReason(brightnessReason)
+                 .setDisplayBrightnessStrategyName(getName())
+-                .setIsSlowChange(mIsSlowChange)
++                .setIsSlowChange(mIsSlowChange && !startupCorrection)
+                 .setBrightnessEvent(brightnessEvent)
+                 .setBrightnessAdjustmentFlag(mAutoBrightnessAdjustmentReasonsFlags)
+                 .setShouldUpdateScreenBrightnessSetting(shouldUpdateScreenBrightnessSetting)

@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+packages/apps/Settings cee0f8941ad81fcb86b13ce90268eca3b69c5282 pixelos-appfunctions-lock-return.patch

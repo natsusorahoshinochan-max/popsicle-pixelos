@@ -1,0 +1,10 @@
+--- a/framework/Android.bp
++++ b/framework/Android.bp
+@@ -46,6 +46,7 @@
+     min_sdk_version: "34",
+     sdk_version: "module_current",
+     impl_library_visibility: [
++        "//frameworks/base/tools/popsicle-turbo",
+         "//packages/modules/ConfigInfrastructure:__subpackages__",
+         "//frameworks/base/ravenwood",
+     ],

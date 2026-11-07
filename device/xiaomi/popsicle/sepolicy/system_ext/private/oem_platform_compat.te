@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The retained 202504 vendor policy references these OEM system_ext types.
+# Their original ownership is proven by system_ext_sepolicy.cil and the OEM
+# system_ext file/seapp contexts. Keep the compatibility types on the platform
+# side without installing OEM applications, executables, services or new rules.
+# vendor_policy.py moves their existing coredomain membership here; the combined
+# permissions remain unchanged. Live device HALs use their separate hal_* types.
+type cameramind_app, domain, coredomain;
+type hypsys_ssi_default, domain, coredomain;
+type joyose_app, domain, coredomain;
+type misight, domain, coredomain;
+type mslg_app, domain, coredomain;
+type swapboost_native, domain, coredomain;
+type theme, domain, coredomain;
+
+# Fixed platform private/compat/202504/202504.compat.cil defines these legacy
+# AVF domains and retains their platform data/entrypoint rules. Declare their
+# core ownership in the platform-only policy too; the retained public vendor
+# CIL must not be the input that grants it. Current launchers use *_vendor.
+type crosvm, domain, coredomain;
+type early_virtmgr, domain, coredomain;
+type virtualizationmanager, domain, coredomain;

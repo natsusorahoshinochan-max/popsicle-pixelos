@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: Apache-2.0
+// Place under the existing private oem-abi namespace, in libaudioutils/.
+package {
+    default_applicable_licenses: ["popsicle_oem_libaudioutils_notice"],
+}
+
+license {
+    name: "popsicle_oem_libaudioutils_notice",
+    visibility: [":__subpackages__"],
+    license_kinds: ["legacy_notice"],
+    license_text: ["NOTICE"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libaudioutils.popsicle_oem",
+    source_module_name: "libaudioutils",
+    stem: "libaudioutils",
+    visibility: ["//visibility:public"],
+    vendor_available: true,
+    compile_multilib: "64",
+    prefer: true,
+    target: {
+        vendor: {
+            srcs: ["arm64/libaudioutils.so"],
+        },
+    },
+    strip: {
+        none: true,
+    },
+    check_elf_files: true,
+    double_loadable: true,
+    stl: "libc++",
+    shared_libs: [
+        "libaconfig_storage_read_api_cc",
+        "libcutils",
+        "liblog",
+        "libutils",
+        "server_configurable_flags",
+        "libspeexresampler",
+    ],
+    system_shared_libs: ["libc", "libm", "libdl"],
+    header_libs: [
+        "libaudioutils_headers",
+        "libaudio_system_headers",
+        "libutils_headers",
+    ],
+    export_header_lib_headers: [
+        "libaudioutils_headers",
+        "libaudio_system_headers",
+        "libutils_headers",
+    ],
+    min_sdk_version: "29",
+}

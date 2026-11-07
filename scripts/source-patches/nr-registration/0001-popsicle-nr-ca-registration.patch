@@ -1,0 +1,66 @@
+--- a/src/java/com/android/internal/telephony/CellularNetworkService.java
++++ b/src/java/com/android/internal/telephony/CellularNetworkService.java
+@@ -23,6 +23,7 @@
+ import android.hardware.radio.network.RegState;
+ import android.hardware.radio.network.SatelliteTechnology;
+ import android.os.AsyncResult;
++import android.os.Build;
+ import android.os.Handler;
+ import android.os.Looper;
+ import android.os.Message;
+@@ -80,6 +81,9 @@
+ 
+     // From 24.008 6.1.3.0 and 10.5.6.2 the maximum number of PDP Contexts is 16.
+     private static final int MAX_DATA_CALLS = 16;
++
++    // The popsicle vendor reports NR carrier aggregation as a private registration RAT.
++    private static final int POPSICLE_RIL_RADIO_TECHNOLOGY_NR_CA = 30;
+ 
+     private static final Map<Class<? extends CellIdentity>, List<Integer>> sNetworkTypes;
+ 
+@@ -467,7 +471,10 @@
+                             "RIL Missing Reg Fail Reason", mPhone.getCarrierId());
+             }
+ 
+-            int networkType = ServiceState.rilRadioTechnologyToNetworkType(regResult.rat);
++            final boolean isPopsicleNrCa = "popsicle".equals(Build.DEVICE)
++                    && regResult.rat == POPSICLE_RIL_RADIO_TECHNOLOGY_NR_CA;
++            int networkType = isPopsicleNrCa ? TelephonyManager.NETWORK_TYPE_NR
++                    : ServiceState.rilRadioTechnologyToNetworkType(regResult.rat);
+             if (networkType == TelephonyManager.NETWORK_TYPE_LTE_CA) {
+                 networkType = TelephonyManager.NETWORK_TYPE_LTE;
+             }
+@@ -550,17 +557,19 @@
+             }
+ 
+             // build the result based on the domain for the request
++            final NetworkRegistrationInfo registrationInfo;
+             switch (domain) {
+                 case NetworkRegistrationInfo.DOMAIN_CS:
+-                    return new NetworkRegistrationInfo(domain, transportType, regState,
++                    registrationInfo = new NetworkRegistrationInfo(domain, transportType, regState,
+                             networkType, reasonForDenial, isEmergencyOnly, availableServices,
+                             cellIdentity, rplmn, cssSupported, roamingIndicator, systemIsInPrl,
+                             defaultRoamingIndicator);
++                    break;
+                 default:
+                     loge("Unknown domain passed to CellularNetworkService= " + domain);
+                     // fall through
+                 case NetworkRegistrationInfo.DOMAIN_PS:
+-                    return new NetworkRegistrationInfo.Builder()
++                    registrationInfo = new NetworkRegistrationInfo.Builder()
+                         .setDomain(domain)
+                         .setTransportType(transportType)
+                         .setRegistrationState(regState)
+@@ -584,6 +593,11 @@
+                                      .build())
+                         .build();
+             }
++            if (isPopsicleNrCa) {
++                // Set this after construction: Builder does not carry the CA property.
++                registrationInfo.setIsUsingCarrierAggregation(true);
++            }
++            return registrationInfo;
+         }
+ 
+         private @NonNull NetworkRegistrationInfo getNetworkRegistrationInfo1_6(

@@ -1,0 +1,172 @@
+--- a/telephony/java/android/telephony/CellSignalStrengthCdma.java
++++ b/telephony/java/android/telephony/CellSignalStrengthCdma.java
+@@ -184,6 +184,9 @@
+      * Get cdma as level 0..4
+      */
+     public int getCdmaLevel() {
++        if (DeviceSignalStrengthLevels.isEnabled(null)) {
++            return DeviceSignalStrengthLevels.cdma(mCdmaDbm);
++        }
+         final int cdmaDbm = getCdmaDbm();
+         final int cdmaEcio = getCdmaEcio();
+         int levelDbm;
+@@ -213,6 +216,9 @@
+      * Get Evdo as level 0..4
+      */
+     public int getEvdoLevel() {
++        if (DeviceSignalStrengthLevels.isEnabled(null)) {
++            return DeviceSignalStrengthLevels.cdma(mEvdoDbm);
++        }
+         int evdoDbm = getEvdoDbm();
+         int evdoSnr = getEvdoSnr();
+         int levelEvdoDbm;
+--- a/telephony/java/android/telephony/CellSignalStrengthGsm.java
++++ b/telephony/java/android/telephony/CellSignalStrengthGsm.java
+@@ -104,6 +104,10 @@
+     /** @hide */
+     @Override
+     public void updateLevel(PersistableBundle cc, ServiceState ss) {
++        if (DeviceSignalStrengthLevels.isEnabled(ss)) {
++            mLevel = DeviceSignalStrengthLevels.gsm(mRssi);
++            return;
++        }
+         int[] rssiThresholds;
+         if (cc == null) {
+             rssiThresholds = sRssiThresholds;
+--- a/telephony/java/android/telephony/CellSignalStrengthLte.java
++++ b/telephony/java/android/telephony/CellSignalStrengthLte.java
+@@ -254,6 +254,11 @@
+     /** @hide */
+     @Override
+     public void updateLevel(PersistableBundle cc, ServiceState ss) {
++        if (DeviceSignalStrengthLevels.isEnabled(ss)) {
++            mParametersUseForLevel = USE_RSRP;
++            mLevel = DeviceSignalStrengthLevels.lte(mRsrp, mRssi, ss);
++            return;
++        }
+         int[] rsrpThresholds, rsrqThresholds, rssnrThresholds;
+         boolean rsrpOnly;
+         if (cc == null) {
+--- a/telephony/java/android/telephony/CellSignalStrengthNr.java
++++ b/telephony/java/android/telephony/CellSignalStrengthNr.java
+@@ -405,6 +405,11 @@
+     /** @hide */
+     @Override
+     public void updateLevel(PersistableBundle cc, ServiceState ss) {
++        if (DeviceSignalStrengthLevels.isEnabled(ss)) {
++            mParametersUseForLevel = USE_SSRSRP;
++            mLevel = DeviceSignalStrengthLevels.nr(mSsRsrp);
++            return;
++        }
+         if (cc == null) {
+             mParametersUseForLevel = USE_SSRSRP;
+         } else {
+--- a/telephony/java/android/telephony/CellSignalStrengthTdscdma.java
++++ b/telephony/java/android/telephony/CellSignalStrengthTdscdma.java
+@@ -113,6 +113,10 @@
+     /** @hide */
+     @Override
+     public void updateLevel(PersistableBundle cc, ServiceState ss) {
++        if (DeviceSignalStrengthLevels.isEnabled(ss)) {
++            mLevel = DeviceSignalStrengthLevels.tdscdma(mRscp);
++            return;
++        }
+         if (mRscp > TDSCDMA_RSCP_MAX) mLevel = SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
+         else if (mRscp >= TDSCDMA_RSCP_GREAT) mLevel = SIGNAL_STRENGTH_GREAT;
+         else if (mRscp >= TDSCDMA_RSCP_GOOD)  mLevel = SIGNAL_STRENGTH_GOOD;
+--- a/telephony/java/android/telephony/CellSignalStrengthWcdma.java
++++ b/telephony/java/android/telephony/CellSignalStrengthWcdma.java
+@@ -134,6 +134,10 @@
+     /** @hide */
+     @Override
+     public void updateLevel(PersistableBundle cc, ServiceState ss) {
++        if (DeviceSignalStrengthLevels.isEnabled(ss)) {
++            mLevel = DeviceSignalStrengthLevels.wcdma(mRscp);
++            return;
++        }
+         String calcMethod;
+         int[] rscpThresholds;
+ 
+--- /dev/null
++++ b/telephony/java/android/telephony/DeviceSignalStrengthLevels.java
+@@ -0,0 +1,80 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package android.telephony;
++
++import android.os.Build;
++
++/** Device display policy, separate from the modem's reporting criteria. */
++final class DeviceSignalStrengthLevels {
++    // OS4.0.0.23.XPBCNXM cust_features.xml display arrays, not report arrays.
++    private static final int[] GSM = {-113, -103, -97, -91};
++    private static final int[] WCDMA = {-113, -105, -99, -91};
++    private static final int[] TDSCDMA = {-120, -110, -100, -90};
++    private static final int[] CDMA = {-109, -101, -97, -93};
++    private static final int[] RSRP = {-140, -120, -115, -105};
++
++    private DeviceSignalStrengthLevels() {}
++
++    static boolean isEnabled(ServiceState serviceState) {
++        return "popsicle".equals(Build.DEVICE)
++                && (serviceState == null || !serviceState.isUsingNonTerrestrialNetwork());
++    }
++
++    static int gsm(int rssi) {
++        return level(rssi, GSM, -113, -51);
++    }
++
++    static int wcdma(int rscp) {
++        return level(rscp, WCDMA, -120, -25);
++    }
++
++    static int tdscdma(int rscp) {
++        return level(rscp, TDSCDMA, -120, -25);
++    }
++
++    static int cdma(int dbm) {
++        return dbm == -1 ? CellSignalStrength.SIGNAL_STRENGTH_NONE_OR_UNKNOWN
++                : level(dbm, CDMA, -120, 0);
++    }
++
++    static int lte(int rsrp, int rssi, ServiceState serviceState) {
++        // Do not turn an unavailable measurement into a valid one by applying a boost.
++        long boosted = rsrp == CellInfo.UNAVAILABLE ? CellInfo.UNAVAILABLE
++                : (long) rsrp + (serviceState == null ? 0 : serviceState.getArfcnRsrpBoost());
++        if (boosted < -140 || boosted > -44) {
++            return gsm(rssi);
++        }
++        return level((int) boosted, RSRP, -140, -44);
++    }
++
++    static int nr(int ssRsrp) {
++        // Stock NR display uses SS-RSRP directly; its LTE-only boost is not applied here.
++        return level(ssRsrp, RSRP, -140, -44);
++    }
++
++    private static int level(int value, int[] thresholds, int min, int max) {
++        // Match the stock display boundary: the minimum itself is unknown/zero bars.
++        if (value == CellInfo.UNAVAILABLE || value <= min || value > max) {
++            return CellSignalStrength.SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
++        }
++        int level = thresholds.length;
++        while (level > 0 && value < thresholds[level - 1]) {
++            level--;
++        }
++        return level;
++    }
++}

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.pixelos.popsicle.navigation.framework">
+    <application android:hasCode="false" android:label="Hidden gesture navigation" />
+    <overlay android:targetPackage="android"
+        android:category="org.pixelos.popsicle.navigation.visibility"
+        android:isStatic="false" android:priority="9999" />
+</manifest>

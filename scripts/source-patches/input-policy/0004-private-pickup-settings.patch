@@ -1,0 +1,16 @@
+diff --git a/src/com/android/settings/display/LiftToWakePreferenceController.java b/src/com/android/settings/display/LiftToWakePreferenceController.java
+--- a/src/com/android/settings/display/LiftToWakePreferenceController.java
++++ b/src/com/android/settings/display/LiftToWakePreferenceController.java
+@@ -38,7 +38,11 @@
+     @Override
+     public boolean isAvailable() {
+         SensorManager sensors = (SensorManager) mContext.getSystemService(Context.SENSOR_SERVICE);
+-        return sensors != null && sensors.getDefaultSensor(Sensor.TYPE_WAKE_GESTURE) != null;
++        int type = mContext.getResources().getInteger(
++                com.android.internal.R.integer.config_wakeGestureSensorType);
++        Sensor sensor = sensors == null ? null : sensors.getDefaultSensor(type, true);
++        return sensor != null && (sensor.getReportingMode() == Sensor.REPORTING_MODE_ONE_SHOT
++                || sensor.getReportingMode() == Sensor.REPORTING_MODE_SPECIAL_TRIGGER);
+     }
+ 
+     @Override

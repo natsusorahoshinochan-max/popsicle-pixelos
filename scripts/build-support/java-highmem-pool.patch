@@ -1,0 +1,88 @@
+--- a/java/aar.go
++++ b/java/aar.go
+@@ -816,6 +816,7 @@
+ 
+ var resourceProcessorBusyBox = pctx.AndroidStaticRule("resourceProcessorBusyBox",
+ 	blueprint.RuleParams{
++		Pool: javaHighmemPool,
+ 		Command: "${config.JavaCmd} ${config.ResourceProcessorBusyBoxSuppressJDKWarnings} " +
+ 			"-cp ${config.ResourceProcessorBusyBox} " +
+ 			"com.google.devtools.build.android.ResourceProcessorBusyBox --tool=GENERATE_BINARY_R -- @${out}.args && " +
+--- a/java/builder.go
++++ b/java/builder.go
+@@ -34,6 +34,9 @@
+ var (
+ 	pctx = android.NewPackageContext("android/soong/java")
+ 
++	// Share the Soong UI high-memory pool across Java-heavy actions.
++	javaHighmemPool = blueprint.NewBuiltinPool("highmem_pool")
++
+ 	mergeZips       = android.MergeZips
+ 	zipSync         = android.ZipSync
+ 	rm              = android.Rm
+@@ -82,6 +85,7 @@
+ 	// * Runs additional tools on the output to prepare for next iteration
+ 	javacInc, javacIncRE = pctx.MultiCommandRemoteStaticRules("javac-inc",
+ 		blueprint.RuleParams{
++			Pool: javaHighmemPool,
+ 			Command: `rm -rf "$annoSrcJar.tmp" "$out.tmp" && ` +
+ 				`mkdir -p "$annoDir" && ` +
+ 				`if [ -s $out.rsp ] && [ -s $srcJarList ] ; then ` +
+@@ -157,6 +161,7 @@
+ 	// .srcjar files are unzipped into a temporary directory when compiled with javac.
+ 	javac, javacRE = pctx.MultiCommandRemoteStaticRules("javac",
+ 		blueprint.RuleParams{
++			Pool: javaHighmemPool,
+ 			Command: `rm -rf "$outDir" "$annoDir" "$annoSrcJar.tmp" "$srcJarDir" "$out.tmp" && ` +
+ 				`mkdir -p "$outDir" "$annoDir" "$srcJarDir" && ` +
+ 				`${config.ZipSyncCmd} -d $srcJarDir -l $srcJarDir/list -f "*.java" $srcJars && ` +
+@@ -276,6 +281,7 @@
+ 
+ 	turbine, turbineRE = pctx.RemoteStaticRules("turbine",
+ 		blueprint.RuleParams{
++			Pool: javaHighmemPool,
+ 			Command: `$reTemplate${config.JavaCmd} ${config.JavaVmFlags} -jar ${config.TurbineJar} $outputFlags ` +
+ 				`--sources @$out.rsp ` +
+ 				`--javacopts ${config.CommonJdkFlags} ` +
+--- a/java/dex.go
++++ b/java/dex.go
+@@ -315,6 +315,7 @@
+ 
+ var d8Inc, d8IncRE = pctx.MultiCommandRemoteStaticRules("d8Inc",
+ 	blueprint.RuleParams{
++		Pool: javaHighmemPool,
+ 		Command: `mkdir -p "$outDir" "$outDir/packages" && ` +
+ 			`. ${config.UsePartialCompileFile} && ` +
+ 			`${config.IncrementalDexInputCmd} ` +
+@@ -369,6 +370,7 @@
+ 
+ var d8IncR8, d8IncR8RE = pctx.MultiCommandRemoteStaticRules("d8Incr8",
+ 	blueprint.RuleParams{
++		Pool: javaHighmemPool,
+ 		Command: `mkdir -p "$outDir" "$outDir/packages" && ` +
+ 			`rm -rf "$outDict" "$outConfig" "${outUsageDir}" "${outDepfile}" && ` +
+ 			`mkdir -p $$(dirname ${outUsage}) && ` +
+@@ -441,6 +443,7 @@
+ 
+ var d8, d8RE = pctx.MultiCommandRemoteStaticRules("d8",
+ 	blueprint.RuleParams{
++		Pool: javaHighmemPool,
+ 		Command: `rm -rf "$outDir" && mkdir -p "$outDir" && ` +
+ 			`$d8Template${config.D8Cmd} ${config.D8Flags} $d8Flags --output $outDir --no-dex-input-jar $in && ` +
+ 			`$zipTemplate${config.SoongZipCmd} $zipFlags -o $outDir/classes.dex.jar -C $outDir -f "$outDir/classes*.dex" && ` +
+@@ -483,6 +486,7 @@
+ 
+ var d8r8, d8r8RE = pctx.MultiCommandRemoteStaticRules("d8r8",
+ 	blueprint.RuleParams{
++		Pool: javaHighmemPool,
+ 		Command: `rm -rf "$outDir" && mkdir -p "$outDir" && ` +
+ 			`rm -f "$outDict" && rm -f "$outConfig" && rm -rf "${outUsageDir}" && ` +
+ 			`mkdir -p $$(dirname ${outUsage}) && ` +
+@@ -547,6 +551,7 @@
+ 
+ var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
+ 	blueprint.RuleParams{
++		Pool: javaHighmemPool,
+ 		Command: `rm -rf "$outDir" && mkdir -p "$outDir" && ` +
+ 			`rm -f "$outDict" && rm -f "$outConfig" && rm -rf "${outUsageDir}" && ` +
+ 			`mkdir -p $$(dirname ${outUsage}) && ` +

@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+packages/apps/Aperture cf1bc0a72524318d0e06ebe938a20b170f1eb878 0001-aperture-cache-input.patch

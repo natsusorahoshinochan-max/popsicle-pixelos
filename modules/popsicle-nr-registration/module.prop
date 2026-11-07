@@ -1,0 +1,6 @@
+id=popsicle_nr_registration
+name=Popsicle NR_CA registration fix
+version=0.1
+versionCode=1
+author=Kanoe
+description=Normalize private NR_CA registration RAT on PixelOS 20261002 seven-fixes ROM. Includes matching system boot images. Disable and reboot to restore.

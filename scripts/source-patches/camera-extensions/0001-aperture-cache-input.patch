@@ -1,0 +1,24 @@
+--- a/app/libs/Android.bp
++++ b/app/libs/Android.bp
+@@ -36,7 +36,7 @@
+ 
+ android_library_import {
+     name: "Aperture_androidx.camera_camera-camera2-pipe",
+-    aars: ["androidx/camera/camera-camera2-pipe/1.7.0-alpha03/camera-camera2-pipe-1.7.0-alpha03.aar"],
++    aars: [":popsicle_camera_camera2_pipe"],
+     sdk_version: "36",
+     min_sdk_version: "26",
+     apex_available: [
+@@ -618,3 +618,12 @@
+     static_libs: [
+     ],
+ }
++
++// Guarded repair of the pinned CameraX dependency before normal app compilation.
++genrule {
++    name: "popsicle_camera_camera2_pipe",
++    tools: ["popsicle_camera_extension_cache"],
++    srcs: ["androidx/camera/camera-camera2-pipe/1.7.0-alpha03/camera-camera2-pipe-1.7.0-alpha03.aar"],
++    out: ["camera-camera2-pipe-popsicle.aar"],
++    cmd: "$(location popsicle_camera_extension_cache) $(in) $(out)",
++}

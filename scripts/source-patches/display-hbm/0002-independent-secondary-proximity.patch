@@ -1,0 +1,159 @@
+diff --git a/services/core/java/com/android/server/display/DisplayDeviceConfig.java b/services/core/java/com/android/server/display/DisplayDeviceConfig.java
+--- a/services/core/java/com/android/server/display/DisplayDeviceConfig.java
++++ b/services/core/java/com/android/server/display/DisplayDeviceConfig.java
+@@ -768,6 +768,7 @@
+     // Is null when no sensor should be used for that display
+     @Nullable
+     private SensorData mProximitySensor;
++    private boolean mIndependentProximitySensor;
+ 
+     // The details of the temperature sensor associated with this display.
+     // Throttling will be based on thermal status of this sensor.
+@@ -1489,7 +1490,13 @@
+     @Nullable
+     public SensorData getProximitySensor() {
+         return mProximitySensor;
++    }
++
++    /** Whether a secondary display uses its own sensor to blank only that display. */
++    public boolean isIndependentProximitySensorEnabled() {
++        return mIndependentProximitySensor;
+     }
++
+ 
+     /**
+      * @return temperature sensor data associated with the display.
+@@ -1905,6 +1912,7 @@
+                 + "mAmbientLightSensor=" + mAmbientLightSensor
+                 + ", mScreenOffBrightnessSensor=" + mScreenOffBrightnessSensor
+                 + ", mProximitySensor=" + mProximitySensor
++                + ", mIndependentProximitySensor=" + mIndependentProximitySensor
+                 + ", mTempSensor=" + mTempSensor
+                 + ", mRefreshRateLimitations= " + Arrays.toString(mRefreshRateLimitations.toArray())
+                 + ", mDensityMapping= " + mDensityMapping
+@@ -2036,6 +2044,8 @@
+                 mScreenOffBrightnessSensor = SensorData.loadScreenOffBrightnessSensorConfig(config);
+                 mColorSensor = SensorData.loadColorSensorConfig(config, mContext.getResources());
+                 mProximitySensor = SensorData.loadProxSensorConfig(mFlags, config);
++                mIndependentProximitySensor =
++                        config.getIndependentProximitySensor();
+                 mTempSensor = SensorData.loadTempSensorConfig(mFlags, config);
+                 mRefreshRateData = RefreshRateData
+                         .loadRefreshRateData(config, mContext.getResources());
+diff --git a/services/core/java/com/android/server/display/DisplayPowerProximityStateController.java b/services/core/java/com/android/server/display/DisplayPowerProximityStateController.java
+--- a/services/core/java/com/android/server/display/DisplayPowerProximityStateController.java
++++ b/services/core/java/com/android/server/display/DisplayPowerProximityStateController.java
+@@ -90,7 +90,7 @@
+     private final SensorEventListener mProximitySensorListener = new SensorEventListener() {
+         @Override
+         public void onSensorChanged(SensorEvent event) {
+-            if (mProximitySensorEnabled) {
++            if (mProximitySensorEnabled && event.sensor == mProximitySensor) {
+                 final long time = mClock.uptimeMillis();
+                 final float distance = event.values[0];
+                 boolean positive = distance >= 0.0f && distance < mProximityThreshold;
+@@ -106,6 +106,7 @@
+ 
+     // The proximity sensor, or null if not available or needed.
+     private Sensor mProximitySensor;
++    private boolean mIndependentProximitySensor;
+ 
+     // The configurations for the associated display
+     private DisplayDeviceConfig mDisplayDeviceConfig;
+@@ -243,7 +244,8 @@
+             int displayState) {
+         mSkipRampBecauseOfProximityChangeToNegative = false;
+         if (mProximitySensor != null) {
+-            if (displayPowerRequest.useProximitySensor && displayState != Display.STATE_OFF) {
++            if ((displayPowerRequest.useProximitySensor || mIndependentProximitySensor)
++                    && displayState != Display.STATE_OFF) {
+                 // At this point the policy says that the screen should be on, but we've been
+                 // asked to listen to the prox sensor to adjust the display state, so lets make
+                 // sure the sensor is on.
+@@ -343,6 +345,7 @@
+         pw.println("  mWaitingForNegativeProximity=" + mWaitingForNegativeProximity);
+         pw.println("  mIgnoreProximityUntilChanged=" + mIgnoreProximityUntilChanged);
+         pw.println("  mProximitySensor=" + mProximitySensor);
++        pw.println("  mIndependentProximitySensor=" + mIndependentProximitySensor);
+         pw.println("  mProximitySensorEnabled=" + mProximitySensorEnabled);
+         pw.println("  mProximityThreshold=" + mProximityThreshold);
+         pw.println("  mProximity=" + proximityToString(mProximity));
+@@ -365,25 +368,36 @@
+     }
+ 
+     private void sendOnProximityPositiveWithWakelock() {
++        // PMS callbacks update the default group and must not observe another screen's sensor.
++        if (mDisplayId != Display.DEFAULT_DISPLAY) return;
+         mWakelockController.acquireWakelock(WakelockController.WAKE_LOCK_PROXIMITY_POSITIVE);
+         mHandler.post(mWakelockController.getOnProximityPositiveRunnable());
+     }
+ 
+     private void sendOnProximityNegativeWithWakelock() {
++        if (mDisplayId != Display.DEFAULT_DISPLAY) return;
+         mWakelockController.acquireWakelock(WakelockController.WAKE_LOCK_PROXIMITY_NEGATIVE);
+         mHandler.post(mWakelockController.getOnProximityNegativeRunnable());
+     }
+ 
+     private void loadProximitySensor() {
+-        if (DEBUG_PRETEND_PROXIMITY_SENSOR_ABSENT || mDisplayId != Display.DEFAULT_DISPLAY) {
+-            return;
++        mIndependentProximitySensor = mDisplayId != Display.DEFAULT_DISPLAY
++                && mDisplayDeviceConfig.isIndependentProximitySensorEnabled();
++        Sensor sensor = null;
++        if (!DEBUG_PRETEND_PROXIMITY_SENSOR_ABSENT
++                && (mDisplayId == Display.DEFAULT_DISPLAY || mIndependentProximitySensor)) {
++            sensor = SensorUtils.findSensor(mSensorManager,
++                    mDisplayDeviceConfig.getProximitySensor(), mIndependentProximitySensor
++                            ? SensorUtils.NO_FALLBACK : Sensor.TYPE_PROXIMITY);
+         }
+-        mProximitySensor = SensorUtils.findSensor(mSensorManager,
+-                mDisplayDeviceConfig.getProximitySensor(), Sensor.TYPE_PROXIMITY);
+-        if (mProximitySensor != null) {
+-            mProximityThreshold = Math.min(mProximitySensor.getMaximumRange(),
+-                    TYPICAL_PROXIMITY_THRESHOLD);
++        if (sensor != mProximitySensor) {
++            // The same logical display may now use another physical device/configuration.
++            // Stop its old listener and debounce before accepting events from the new sensor.
++            setProximitySensorEnabled(false);
++            mProximitySensor = sensor;
+         }
++        mProximityThreshold = sensor == null ? 0 : Math.min(sensor.getMaximumRange(),
++                TYPICAL_PROXIMITY_THRESHOLD);
+     }
+ 
+     private void setProximitySensorEnabled(boolean enable) {
+diff --git a/services/core/xsd/display-device-config/display-device-config.xsd b/services/core/xsd/display-device-config/display-device-config.xsd
+--- a/services/core/xsd/display-device-config/display-device-config.xsd
++++ b/services/core/xsd/display-device-config/display-device-config.xsd
+@@ -112,6 +112,12 @@
+                     <xs:annotation name="final"/>
+                 </xs:element>
+                 <xs:element type="sensorDetails" name="screenOffBrightnessSensor">
++                    <xs:annotation name="final"/>
++                </xs:element>
++                <!-- Opt in a secondary display to its own proximity blanking, including doze.
++                     The explicitly selected sensor must exist; never use the main sensor as a
++                     fallback. This does not change the default display's telephony policy. -->
++                <xs:element type="xs:boolean" name="independentProximitySensor" minOccurs="0">
+                     <xs:annotation name="final"/>
+                 </xs:element>
+                 <xs:element type="sensorDetails" name="proxSensor" maxOccurs="2">
+diff --git a/services/core/xsd/display-device-config/schema/current.txt b/services/core/xsd/display-device-config/schema/current.txt
+--- a/services/core/xsd/display-device-config/schema/current.txt
++++ b/services/core/xsd/display-device-config/schema/current.txt
+@@ -145,6 +145,7 @@
+     method @Nullable public final com.android.server.display.config.HdrBrightnessConfig getHdrBrightnessConfig();
+     method public com.android.server.display.config.HighBrightnessMode getHighBrightnessMode();
+     method public final com.android.server.display.config.IdleScreenRefreshRateTimeout getIdleScreenRefreshRateTimeout();
++    method public final boolean getIndependentProximitySensor();
+     method public final com.android.server.display.config.SensorDetails getLightSensor();
+     method public com.android.server.display.config.LuxThrottling getLuxThrottling();
+     method @Nullable public final String getName();
+@@ -187,6 +188,7 @@
+     method public final void setHdrBrightnessConfig(@Nullable com.android.server.display.config.HdrBrightnessConfig);
+     method public void setHighBrightnessMode(com.android.server.display.config.HighBrightnessMode);
+     method public final void setIdleScreenRefreshRateTimeout(com.android.server.display.config.IdleScreenRefreshRateTimeout);
++    method public final void setIndependentProximitySensor(boolean);
+     method public final void setLightSensor(com.android.server.display.config.SensorDetails);
+     method public void setLuxThrottling(com.android.server.display.config.LuxThrottling);
+     method public final void setName(@Nullable String);

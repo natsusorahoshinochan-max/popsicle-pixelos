@@ -1,0 +1,20 @@
+--- a/java/base.go
++++ b/java/base.go
+@@ -1963,6 +1963,8 @@
+ 		outputFile = combinedJar
+ 	}
+ 
++	ctx.SetOutputFiles(android.PathsIfNonNil(outputFile), ".jar.pre-jarjar")
++
+ 	// jarjar implementation jar if necessary
+ 	jarjarFile, jarjarred := j.jarjarIfNecessary(ctx, outputFile, jarName, "", true)
+ 	if jarjarred {
+@@ -2266,6 +2268,8 @@
+ 	if deps.headerJarOverride.Valid() {
+ 		j.headerJarFile = deps.headerJarOverride.Path()
+ 	}
++
++	ctx.SetOutputFiles(android.PathsIfNonNil(combinedHeaderJarFile), ".hjar.pre-jarjar")
+ 
+ 	overridableMinSdkVersion := j.overridableProperties.Min_sdk_version.Get(ctx)
+ 

@@ -1,0 +1,527 @@
+diff --git a/core/java/miui/process/ProcessManager.java b/core/java/miui/process/ProcessManager.java
+--- a/core/java/miui/process/ProcessManager.java
++++ b/core/java/miui/process/ProcessManager.java
+@@ -21,9 +21,19 @@
+ import android.os.Parcel;
+ import android.os.RemoteException;
+ import android.os.ServiceManager;
++import android.os.SystemProperties;
+ 
+ /** Narrow original entry point; no process-management operations are emulated. @hide */
+ public final class ProcessManager {
++    private static final boolean PROCESS_CLEANER_ENABLED =
++            SystemProperties.getBoolean("persist.sys.spc.enabled", false);
++
++    @UnsupportedAppUsage
++    public static final int LOCKED_MAX_ADJ = PROCESS_CLEANER_ENABLED ? 701 : 400;
++
++    @UnsupportedAppUsage
++    public static final int LOCKED_MAX_PROCESS_STATE = PROCESS_CLEANER_ENABLED ? 10 : 13;
++
+     private ProcessManager() {}
+ 
+     @UnsupportedAppUsage
+diff --git a/services/core/java/com/android/server/am/psc/ProcessRecordInternal.java b/services/core/java/com/android/server/am/psc/ProcessRecordInternal.java
+--- a/services/core/java/com/android/server/am/psc/ProcessRecordInternal.java
++++ b/services/core/java/com/android/server/am/psc/ProcessRecordInternal.java
+@@ -416,6 +416,10 @@
+      */
+     @GuardedBy("mServiceLock")
+     private @OomAdjust int mMaxAdj = UNKNOWN_ADJ;
++
++    /** OEM policy save/restore state; this does not clamp PSC process-state calculation. */
++    @GuardedBy("mServiceLock")
++    public int mMaxProcState;
+ 
+     /**
+      *  Current OOM unlimited adjustment for this process.
+diff --git a/services/core/java/com/android/server/am/IProcessPolicy.java b/services/core/java/com/android/server/am/IProcessPolicy.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/am/IProcessPolicy.java
+@@ -0,0 +1,28 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.am;
++
++/** The original CameraAdjAdjuster state accessor ABI. */
++public interface IProcessPolicy {
++    static int getAppMaxProcState(ProcessRecord app) {
++        return app.mMaxProcState;
++    }
++
++    static void setAppMaxProcState(ProcessRecord app, int state) {
++        app.mMaxProcState = state;
++    }
++}
+diff --git a/services/core/java/com/android/server/am/OemLockedApplicationState.java b/services/core/java/com/android/server/am/OemLockedApplicationState.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/am/OemLockedApplicationState.java
+@@ -0,0 +1,82 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.am;
++
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++/** User and default application locks used by the OEM process policy. */
++final class OemLockedApplicationState {
++    private static final int DEFAULT_USER = -100;
++
++    // This object's monitor protects every access. No caller receives a live collection.
++    private final Map<Integer, Set<String>> mLockedApps = new HashMap<>();
++
++    OemLockedApplicationState(Map<Integer, ? extends Collection<String>> restored) {
++        for (Map.Entry<Integer, ? extends Collection<String>> entry : restored.entrySet()) {
++            mLockedApps.put(entry.getKey(), new HashSet<>(entry.getValue()));
++        }
++        // The original systemReady adds these after loading locked_apps, including on reboot.
++        Set<String> defaults = mLockedApps.computeIfAbsent(DEFAULT_USER, user -> new HashSet<>());
++        defaults.add("com.jeejen.family.miui");
++        defaults.add("com.xiaomi.bsgamecenter");
++    }
++
++    synchronized boolean isLocked(String packageName, int userId) {
++        return contains(packageName, userId) || contains(packageName, DEFAULT_USER);
++    }
++
++    synchronized void setLocked(String packageName, int userId, boolean locked) {
++        Set<String> apps = mLockedApps.computeIfAbsent(userId, user -> new HashSet<>());
++        if (locked) {
++            apps.add(packageName);
++        } else {
++            apps.remove(packageName);
++            mLockedApps.get(DEFAULT_USER).remove(packageName);
++        }
++    }
++
++    synchronized List<String> getLockedApplications(int userId) {
++        List<String> result = new ArrayList<>();
++        Set<String> apps = mLockedApps.get(userId);
++        if (apps != null) {
++            result.addAll(apps);
++        }
++        // Preserve the original list concatenation, including a package in both sets.
++        result.addAll(mLockedApps.get(DEFAULT_USER));
++        return result;
++    }
++
++    /** A detached per-user snapshot for the original u/pkgs persistence format. */
++    synchronized Map<Integer, Set<String>> snapshot() {
++        Map<Integer, Set<String>> result = new HashMap<>();
++        for (Map.Entry<Integer, Set<String>> entry : mLockedApps.entrySet()) {
++            result.put(entry.getKey(), new HashSet<>(entry.getValue()));
++        }
++        return result;
++    }
++
++    private boolean contains(String packageName, int userId) {
++        Set<String> apps = mLockedApps.get(userId);
++        return apps != null && apps.contains(packageName);
++    }
++}
+diff --git a/services/core/java/com/android/server/am/OemLockedApplicationStore.java b/services/core/java/com/android/server/am/OemLockedApplicationStore.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/am/OemLockedApplicationStore.java
+@@ -0,0 +1,112 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.am;
++
++import android.content.ContentResolver;
++import android.os.Handler;
++import android.provider.Settings;
++import android.util.Slog;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++/** The OEM locked_apps setting; process priority changes remain owned by AMS. */
++final class OemLockedApplicationStore {
++    static final String SETTING = "locked_apps";
++    private static final String TAG = "OemLockedApplications";
++
++    private final ContentResolver mResolver;
++    private final Handler mWriter;
++    private final OemLockedApplicationState mState;
++
++    /** Create at systemReady with the system resolver and BackgroundThread's handler. */
++    OemLockedApplicationStore(ContentResolver resolver, Handler writer) {
++        mResolver = resolver;
++        mWriter = writer;
++        mState = new OemLockedApplicationState(
++                decode(Settings.System.getString(mResolver, SETTING)));
++    }
++
++    boolean isLocked(String packageName, int userId) {
++        return mState.isLocked(packageName, userId);
++    }
++
++    List<String> getLockedApplications(int userId) {
++        return mState.getLockedApplications(userId);
++    }
++
++    /** Update memory and queue persistence before the caller promotes the live process. */
++    synchronized void setLocked(String packageName, int userId, boolean locked) {
++        mState.setLocked(packageName, userId, locked);
++        if (!mWriter.post(this::persist)) {
++            throw new IllegalStateException("Locked application writer is not accepting work");
++        }
++    }
++
++    private void persist() {
++        // Read at execution time, like the original BackgroundThread callback. All writes
++        // use this one handler, so an older queued update cannot overwrite a later write.
++        final String json = encode(mState.snapshot());
++        if (!Settings.System.putString(mResolver, SETTING, json)) {
++            Slog.e(TAG, "Failed to persist " + SETTING);
++        }
++    }
++
++    static Map<Integer, Set<String>> decode(String json) {
++        Map<Integer, Set<String>> result = new HashMap<>();
++        if (json == null || json.isEmpty()) return result;
++        try {
++            JSONArray users = new JSONArray(json);
++            for (int i = 0; i < users.length(); i++) {
++                JSONObject user = users.getJSONObject(i);
++                int userId = user.getInt("u");
++                JSONArray packages = user.getJSONArray("pkgs");
++                Set<String> names = new HashSet<>();
++                for (int j = 0; j < packages.length(); j++) {
++                    names.add(packages.getString(j));
++                }
++                result.put(userId, names);
++            }
++        } catch (JSONException e) {
++            // The original loader logs malformed data and retains already loaded users.
++            Slog.w(TAG, "Failed to load " + SETTING, e);
++        }
++        return result;
++    }
++
++    static String encode(Map<Integer, Set<String>> users) {
++        JSONArray result = new JSONArray();
++        try {
++            for (Map.Entry<Integer, Set<String>> entry : users.entrySet()) {
++                JSONObject user = new JSONObject();
++                user.put("u", entry.getKey());
++                user.put("pkgs", new JSONArray(entry.getValue()));
++                result.put(user);
++            }
++        } catch (JSONException e) {
++            throw new IllegalStateException("Unable to serialize locked applications", e);
++        }
++        return result.toString();
++    }
++}
+diff --git a/services/core/java/com/android/server/am/OemProcessLockPermission.java b/services/core/java/com/android/server/am/OemProcessLockPermission.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/am/OemProcessLockPermission.java
+@@ -0,0 +1,47 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.am;
++
++import android.content.pm.ApplicationInfo;
++import android.os.Binder;
++import android.os.Process;
++
++/** The original ProcessManager mutation permission, using the real AMS PID map. */
++final class OemProcessLockPermission {
++    static void enforce(ActivityManagerService service) {
++        int uid = Binder.getCallingUid();
++        int pid = Binder.getCallingPid();
++        if (uid != Process.SHELL_UID) {
++            if (uid < Process.FIRST_APPLICATION_UID) return;
++            synchronized (service.mPidsSelfLocked) {
++                ProcessRecord app = service.mPidsSelfLocked.get(pid);
++                if (app != null) {
++                    ApplicationInfo info = app.getApplicationInfo();
++                    if (info != null && ((info.flags & (ApplicationInfo.FLAG_SYSTEM
++                            | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
++                            || app.uid == Process.SYSTEM_UID)) {
++                        return;
++                    }
++                }
++            }
++        }
++        throw new SecurityException("ProcessManager.updateApplicationLockedState denied: pid="
++                + pid + ", uid=" + uid);
++    }
++
++    private OemProcessLockPermission() {}
++}
+diff --git a/services/core/java/com/android/server/am/OemProcessLockTarget.java b/services/core/java/com/android/server/am/OemProcessLockTarget.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/am/OemProcessLockTarget.java
+@@ -0,0 +1,104 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.am;
++
++import com.android.internal.annotations.GuardedBy;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Objects;
++import java.util.function.Predicate;
++
++import miui.process.ProcessManager;
++
++/** AMS operations behind the original process-lock transactions. */
++final class OemProcessLockTarget implements OemProcessLockTransactions.Target {
++    private final ActivityManagerService mService;
++    private final OemLockedApplicationStore mStore;
++    // The live policy must supply secretly-protected && !one-push-blocked, not a default value.
++    private final Predicate<String> mSkipLockedPromotion;
++
++    OemProcessLockTarget(ActivityManagerService service, OemLockedApplicationStore store,
++            Predicate<String> skipLockedPromotion) {
++        mService = Objects.requireNonNull(service);
++        mStore = Objects.requireNonNull(store);
++        mSkipLockedPromotion = Objects.requireNonNull(skipLockedPromotion);
++    }
++
++    @Override
++    public void updateApplicationLockedState(String packageName, int userId, boolean locked) {
++        OemProcessLockPermission.enforce(mService);
++        // The original first changes memory and posts its settings writer, then promotes.
++        mStore.setLocked(packageName, userId, locked);
++        synchronized (mService) {
++            ProcessRecord app = findProcessLocked(packageName, userId);
++            if (app != null) promoteLockedApp(app);
++        }
++    }
++
++    @Override
++    public List<String> getLockedApplication(int userId) {
++        return mStore.getLockedApplications(userId);
++    }
++
++    @Override
++    public boolean isLockedApplication(String packageName, int userId) {
++        return mStore.isLocked(packageName, userId);
++    }
++
++    @GuardedBy("mService")
++    private ProcessRecord findProcessLocked(String processName, int userId) {
++        ArrayList<ProcessRecord> processes = mService.mProcessList.getLruProcessesLOSP();
++        for (int i = processes.size() - 1; i >= 0; i--) {
++            ProcessRecord app = processes.get(i);
++            if (app.getThread() != null && app.userId == userId
++                    && app.processName.equals(processName)) {
++                return app;
++            }
++        }
++        return null;
++    }
++
++    @GuardedBy("mService")
++    void promoteLockedApp(ProcessRecord app) {
++        if (app.isPersistent() || mSkipLockedPromotion.test(app.processName)) return;
++        boolean locked = mStore.isLocked(app.processName, app.userId);
++        int adj = locked ? ProcessManager.LOCKED_MAX_ADJ : 1001;
++        int state = locked ? ProcessManager.LOCKED_MAX_PROCESS_STATE : 20;
++        int currentAdj = app.getMaxAdj();
++        if (locked ? currentAdj > adj : currentAdj < adj) {
++            mService.mProcessStateController.setMaxAdj(app, adj);
++        }
++        int currentState = IProcessPolicy.getAppMaxProcState(app);
++        if (locked ? currentState > state : currentState < state) {
++            IProcessPolicy.setAppMaxProcState(app, state);
++        }
++    }
++
++    /** Called under AMS's lock; CameraAdjAdjuster retains its own OOM update after this. */
++    @GuardedBy("mService")
++    void setProcessMaxAdjLock(int userId, ProcessRecord app, int maxAdj, int maxProcState) {
++        if (app == null) return;
++        if (maxAdj > ProcessManager.LOCKED_MAX_ADJ
++                && mStore.isLocked(app.getApplicationInfo().packageName, userId)) {
++            maxAdj = ProcessManager.LOCKED_MAX_ADJ;
++            maxProcState = ProcessManager.LOCKED_MAX_PROCESS_STATE;
++        }
++        mService.mProcessStateController.setMaxAdj(app, maxAdj);
++        IProcessPolicy.setAppMaxProcState(app, maxProcState);
++    }
++}
+diff --git a/services/core/java/com/android/server/am/OemProcessLockTransactions.java b/services/core/java/com/android/server/am/OemProcessLockTransactions.java
+new file mode 100644
+--- /dev/null
++++ b/services/core/java/com/android/server/am/OemProcessLockTransactions.java
+@@ -0,0 +1,87 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.am;
++
++import android.os.IBinder;
++import android.os.Parcel;
++import android.os.RemoteException;
++
++import java.util.List;
++import java.util.Objects;
++
++/** Lock transactions delegated by the existing ProcessManager Binder owner. */
++public final class OemProcessLockTransactions {
++    private static final String DESCRIPTOR = "miui.IProcessManager";
++
++    /** The AMS implementation owns caller checks, storage and live process policy updates. */
++    public interface Target {
++        void updateApplicationLockedState(String packageName, int userId, boolean locked)
++                throws RemoteException;
++        List<String> getLockedApplication(int userId) throws RemoteException;
++        boolean isLockedApplication(String packageName, int userId) throws RemoteException;
++    }
++
++    private final Target mTarget;
++
++    public OemProcessLockTransactions(Target target) {
++        mTarget = Objects.requireNonNull(target);
++    }
++
++    /** Returns false for other transactions, including the owner's foreground listeners. */
++    public boolean onTransact(int code, Parcel data, Parcel reply, int flags)
++            throws RemoteException {
++        if (code != 3 && code != 4 && code != 9) return false;
++        if (reply == null || (flags & IBinder.FLAG_ONEWAY) != 0) {
++            throw new IllegalArgumentException("Process locks require a synchronous transaction");
++        }
++        data.enforceInterface(DESCRIPTOR);
++        switch (code) {
++            case 3: {
++                String packageName = data.readString();
++                int userId = data.readInt();
++                boolean locked = data.readInt() != 0;
++                data.enforceNoDataAvail();
++                mTarget.updateApplicationLockedState(packageName, userId, locked);
++                reply.writeNoException();
++                return true;
++            }
++            case 4: {
++                int userId = data.readInt();
++                data.enforceNoDataAvail();
++                List<String> apps = mTarget.getLockedApplication(userId);
++                reply.writeNoException();
++                int count = apps == null ? -1 : apps.size();
++                reply.writeInt(count);
++                for (int i = 0; i < count; i++) {
++                    reply.writeString(apps.get(i));
++                }
++                return true;
++            }
++            case 9: {
++                String packageName = data.readString();
++                int userId = data.readInt();
++                data.enforceNoDataAvail();
++                boolean locked = mTarget.isLockedApplication(packageName, userId);
++                reply.writeNoException();
++                reply.writeInt(locked ? 1 : 0);
++                return true;
++            }
++            default:
++                throw new AssertionError(code);
++        }
++    }
++}

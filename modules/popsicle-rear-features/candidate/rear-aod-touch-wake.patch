@@ -1,0 +1,89 @@
+--- a/frameworks/base/services/core/java/com/android/server/policy/PhoneWindowManager.java
++++ b/frameworks/base/services/core/java/com/android/server/policy/PhoneWindowManager.java
+@@ -248,7 +248,9 @@
+ import com.android.server.ExtconStateObserver;
+ import com.android.server.ExtconUEventObserver;
+ import com.android.server.GestureLauncherService;
++import com.android.internal.display.OemRearDisplay;
+ import com.android.server.LocalServices;
++import com.android.server.dreams.RearDreamManagerInternal;
+ import com.android.server.LockGuard;
+ import com.android.server.SystemServiceManager;
+ import com.android.server.UiThread;
+@@ -5313,6 +5315,10 @@
+     @Override
+     public int interceptMotionBeforeQueueingNonInteractive(int displayId, int source, int action,
+             long whenNanos, int policyFlags) {
++        if (interceptRearDozeTouch(displayId, source, action, whenNanos, policyFlags)) {
++            return 0;
++        }
++
+         if ((policyFlags & FLAG_WAKE) != 0) {
+             if (mWindowWakeUpPolicy.wakeUpFromMotion(displayId, whenNanos / 1000000, source,
+                     action == MotionEvent.ACTION_DOWN, mDeviceGoingToSleep)) {
+@@ -5326,6 +5332,65 @@
+         }
+ 
+         return 0;
++    }
++
++    // Accessed only by the input reader's non-interactive motion callback.
++    private int mRearDozeTapDisplayId = INVALID_DISPLAY;
++    private long mRearDozeTapDownTime;
++    private long mRearDozePreviousTapTime;
++
++    private boolean interceptRearDozeTouch(int displayId, int source, int action,
++            long whenNanos, int policyFlags) {
++        if ((source & InputDevice.SOURCE_TOUCHSCREEN) != InputDevice.SOURCE_TOUCHSCREEN
++                || (policyFlags & WindowManagerPolicy.FLAG_TRUSTED) == 0
++                || (policyFlags & (FLAG_WAKE | WindowManagerPolicy.FLAG_INJECTED)) != 0) {
++            return false;
++        }
++        final DisplayInfo info = mDisplayManagerInternal.getDisplayInfo(displayId);
++        final RearDreamManagerInternal rear = LocalServices.getService(
++                RearDreamManagerInternal.class);
++        if (!OemRearDisplay.isRearDisplay(mContext.getResources(), info)
++                || info.state == STATE_OFF || rear == null
++                || !rear.isDreaming(info.displayGroupId)) {
++            mRearDozeTapDisplayId = INVALID_DISPLAY;
++            mRearDozeTapDownTime = 0;
++            mRearDozePreviousTapTime = 0;
++            return false;
++        }
++        if (mRearDozeTapDisplayId != displayId) {
++            mRearDozeTapDisplayId = displayId;
++            mRearDozeTapDownTime = 0;
++            mRearDozePreviousTapTime = 0;
++        }
++        final long eventTime = whenNanos / 1000000;
++        switch (action & MotionEvent.ACTION_MASK) {
++            case MotionEvent.ACTION_DOWN:
++                mRearDozeTapDownTime = eventTime;
++                break;
++            case MotionEvent.ACTION_UP:
++                final boolean shortTap = mRearDozeTapDownTime != 0
++                        && eventTime >= mRearDozeTapDownTime
++                        && eventTime - mRearDozeTapDownTime <= ViewConfiguration.getTapTimeout();
++                mRearDozeTapDownTime = 0;
++                if (shortTap && mRearDozePreviousTapTime != 0
++                        && eventTime > mRearDozePreviousTapTime
++                        && eventTime - mRearDozePreviousTapTime
++                                <= ViewConfiguration.getDoubleTapTimeout()) {
++                    mRearDozePreviousTapTime = 0;
++                    mPowerManager.wakeUp(eventTime, PowerManager.WAKE_REASON_GESTURE,
++                            "android.policy:REAR_AOD_DOUBLE_TAP", displayId);
++                } else {
++                    mRearDozePreviousTapTime = shortTap ? eventTime : 0;
++                }
++                break;
++            case MotionEvent.ACTION_CANCEL:
++            case MotionEvent.ACTION_POINTER_DOWN:
++                mRearDozeTapDownTime = 0;
++                mRearDozePreviousTapTime = 0;
++                break;
++        }
++        // The OEM launcher's double-tap handler only sleeps; an AOD touch must not reach it.
++        return true;
+     }
+ 
+     private boolean shouldDispatchInputWhenNonInteractive(int displayId, int keyCode) {

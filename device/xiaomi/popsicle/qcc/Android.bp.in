@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: Apache-2.0
+// Installed with the matching private inputs by prepare_qcc_hal.py.
+
+package {
+    default_applicable_licenses: ["popsicle_qcc_hal_proprietary_license"],
+    default_visibility: ["//visibility:private"],
+}
+
+license {
+    name: "popsicle_qcc_hal_proprietary_license",
+    visibility: [":__subpackages__"],
+    license_kinds: ["legacy_proprietary"],
+}
+
+cc_defaults {
+    name: "popsicle_qcc_hal_defaults",
+    system_ext_specific: true,
+    compile_multilib: "64",
+    stl: "none",
+    system_shared_libs: [
+        "libc",
+        "libm",
+        "libdl",
+    ],
+    allow_undefined_symbols: false,
+    strip: {
+        none: true,
+    },
+}
+
+cc_prebuilt_binary {
+    name: "popsicle_qccsyshal_aidl_service",
+    defaults: ["popsicle_qcc_hal_defaults"],
+    stem: "qccsyshal_aidl-service",
+    srcs: ["bin/qccsyshal_aidl-service"],
+    init_rc: ["qccsyshal_aidl-service.rc"],
+    check_elf_files: true,
+    shared_libs: [
+        "libutils",
+        "libfmq",
+        "libbinder",
+        "liblog",
+        "libcutils",
+        "libbase",
+        "libbinder_ndk",
+        "popsicle_qccsyshal_aidl_ndk",
+        "popsicle_qccsyshal_aidl_impl",
+        "libc++",
+    ],
+}
+
+cc_prebuilt_library_shared {
+    name: "popsicle_qccsyshal_aidl_ndk",
+    defaults: ["popsicle_qcc_hal_defaults"],
+    stem: "vendor.qti.qccsyshal_aidl-V1-ndk",
+    srcs: ["lib64/vendor.qti.qccsyshal_aidl-V1-ndk.so"],
+    check_elf_files: true,
+    shared_libs: [
+        "libbinder_ndk",
+        "android.hardware.common-V2-ndk",
+        "android.hardware.common.fmq-V1-ndk",
+        "libc++",
+    ],
+}
+
+cc_prebuilt_library_shared {
+    name: "popsicle_qccsyshal_aidl_impl",
+    defaults: ["popsicle_qcc_hal_defaults"],
+    stem: "vendor.qti.qccsyshal_aidl-halimpl",
+    srcs: ["lib64/vendor.qti.qccsyshal_aidl-halimpl.so"],
+    check_elf_files: true,
+    shared_libs: [
+        "libutils",
+        "libfmq",
+        "popsicle_qcc_file_agent_sys",
+        "libcutils",
+        "liblog",
+        "libz",
+        "libbase",
+        "libbinder",
+        "libbinder_ndk",
+        "popsicle_qccsyshal_aidl_ndk",
+        "libc++",
+    ],
+}
+
+cc_prebuilt_library_shared {
+    name: "popsicle_qcc_file_agent_sys",
+    defaults: ["popsicle_qcc_hal_defaults"],
+    stem: "libqcc_file_agent_sys",
+    srcs: ["lib64/libqcc_file_agent_sys.so"],
+    check_elf_files: true,
+    shared_libs: [
+        "libcutils",
+        "liblog",
+        "libc++",
+    ],
+}

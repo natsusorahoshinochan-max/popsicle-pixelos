@@ -1,0 +1,13 @@
+// Optional module diagnostic; not part of PRODUCT_PACKAGES or the ROM payload.
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_binary {
+    name: "popsicle-policy-export",
+    srcs: ["policy-export.c"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+    static_libs: ["libsepol"],
+    stl: "none",
+    bootstrap: true,
+}

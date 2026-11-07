@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+# SurfaceFlinger getIdleTimerTimeout(): target the verified main physical display.
+# Experimental timeout; keep the existing 200 ms touch boost and user rate limits.
+debug.sf.set_idle_timer_ms_4630946457447247251=1000

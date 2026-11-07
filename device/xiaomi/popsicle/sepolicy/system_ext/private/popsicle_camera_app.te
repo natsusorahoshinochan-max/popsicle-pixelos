@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# Only the platform-signed privileged OEM camera is assigned this domain.
+# Preserve the SDK 36 privileged-app sandbox, including its Qigsaw native code
+# loading and anonymous-inode restrictions. OEM vendor permissions are derived
+# by vendor_policy.py from the matching firmware, not granted to priv_app_36.
+type popsicle_camera_app, domain, coredomain;
+app_domain(popsicle_camera_app)
+net_domain(popsicle_camera_app)
+bluetooth_domain(popsicle_camera_app)
+create_pty(popsicle_camera_app)
+priv_app_domain(popsicle_camera_app)
+
+# Preserve this product's Qualcomm priv_app_36 clients as well as the AOSP
+# baseline above (device/qcom/sepolicy/generic/private/priv_app_36.te).
+hal_client_domain(popsicle_camera_app, vendor_hal_imsvthal)
+hal_client_domain(popsicle_camera_app, vendor_hal_unsignedhexlp)
+hal_client_domain(popsicle_camera_app, vendor_hal_c2pa)
+qesdk_app_access(popsicle_camera_app)
+
+allow popsicle_camera_app domain:memfd_file ioctl;
+allowxperm popsicle_camera_app domain:memfd_file ioctl ashmem_ioctls;
+allow popsicle_camera_app ashmem_libcutils_device:chr_file open;
+
+# The retained MiSys AIDL service is a real vendor HAL. Its vendor-private
+# client attribute is attached only when the complete managed policy is linked.
+typeattribute popsicle_camera_app halclientdomain;
+
+# The existing owner continues checking platform signature and package identity.
+allow popsicle_camera_app oem_foreground_service:service_manager find;

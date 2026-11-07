@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: Apache-2.0
+// Install beneath the already exported oem-abi namespace, in libcrypto/.
+
+package {
+    default_applicable_licenses: ["popsicle_oem_libcrypto_notice"],
+}
+
+license {
+    name: "popsicle_oem_libcrypto_notice",
+    visibility: [":__subpackages__"],
+    license_kinds: ["legacy_notice"],
+    license_text: ["NOTICE"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libcrypto.popsicle_oem",
+    source_module_name: "libcrypto",
+    stem: "libcrypto",
+    visibility: ["//visibility:public"],
+    vendor_available: true,
+    compile_multilib: "64",
+    prefer: true,
+    target: {
+        vendor: {
+            srcs: ["arm64/libcrypto.so"],
+        },
+    },
+    // The official input already contains its matching BCM integrity hash.
+    strip: {
+        none: true,
+    },
+    check_elf_files: true,
+    stl: "none",
+    system_shared_libs: ["libc", "libm", "libdl"],
+    double_loadable: true,
+    header_libs: ["libcrypto_oem_headers"],
+    export_header_lib_headers: ["libcrypto_oem_headers"],
+    sdk_version: "9",
+    min_sdk_version: "29",
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.adbd",
+        "com.android.adservices",
+        "com.android.bt",
+        "com.android.compos",
+        "com.android.configinfrastructure",
+        "com.android.conscrypt",
+        "com.android.extservices",
+        "com.android.ondevicepersonalization",
+        "com.android.resolv",
+        "com.android.tethering",
+        "com.android.virt",
+        "com.android.wifi",
+    ],
+}

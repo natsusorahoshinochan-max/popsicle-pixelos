@@ -1,0 +1,6 @@
+id=popsicle-storage-accounting
+name=PixelOS popsicle Storage Accounting Fix
+version=v0.1
+versionCode=1
+author=Kanoe
+description=Fix negative Android system storage with consistent Settings capacity accounting. For the 20261014 navigation ROM.

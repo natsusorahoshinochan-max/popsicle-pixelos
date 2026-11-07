@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.lineageos.popsicle.ims.device">
+    <uses-sdk android:minSdkVersion="36" android:targetSdkVersion="37" />
+    <overlay android:targetPackage="android" android:isStatic="true" android:priority="999" />
+    <application android:hasCode="false" />
+</manifest>

@@ -1,0 +1,172 @@
+--- a/services/core/java/com/android/server/display/DisplayControl.java
++++ b/services/core/java/com/android/server/display/DisplayControl.java
+@@ -34,6 +34,12 @@
+     private static native void nativeDestroyVirtualDisplay(IBinder displayToken);
+     private static native void nativeOverrideHdrTypes(IBinder displayToken, int[] modes);
+     private static native long[] nativeGetPhysicalDisplayIds();
++    private static native int[] nativeGetArrDisplayModeIds(long physicalDisplayId);
++
++    /** Returns mode IDs backed by native VRR configurations, or an empty array on failure. */
++    public static int[] getArrDisplayModeIds(long physicalDisplayId) {
++        return nativeGetArrDisplayModeIds(physicalDisplayId);
++    }
+     private static native IBinder nativeGetPhysicalDisplayToken(long physicalDisplayId);
+     private static native int nativeSetHdrConversionMode(int conversionMode,
+             int preferredHdrOutputType, int[] autoHdrTypes, int autoHdrTypesLength);
+--- a/services/core/jni/com_android_server_display_DisplayControl.cpp
++++ b/services/core/jni/com_android_server_display_DisplayControl.cpp
+@@ -15,6 +15,8 @@
+  */
+ 
+ #include <android/gui/IHdrConversionConstants.h>
++#include <android/gui/ISurfaceComposer.h>
++#include <binder/IServiceManager.h>
+ #include <android_util_Binder.h>
+ #include <gui/SurfaceComposerClient.h>
+ #include <jni.h>
+@@ -160,6 +162,20 @@
+     return JNI_FALSE;
+ }
+ 
++static jintArray nativeGetArrDisplayModeIds(JNIEnv* env, jclass, jlong displayId) {
++    std::vector<int32_t> modeIds;
++    const auto service = interface_cast<gui::ISurfaceComposer>(
++            defaultServiceManager()->checkService(String16("SurfaceFlinger")));
++    if (service == nullptr || !service->getArrDisplayModeIds(displayId, &modeIds).isOk()) {
++        modeIds.clear();
++    }
++    jintArray result = env->NewIntArray(modeIds.size());
++    if (result != nullptr && !modeIds.empty()) {
++        env->SetIntArrayRegion(result, 0, modeIds.size(), modeIds.data());
++    }
++    return result;
++}
++
+ static jlongArray nativeGetPhysicalDisplayIds(JNIEnv* env, jclass clazz) {
+     const auto displayIds = SurfaceComposerClient::getPhysicalDisplayIds();
+     ScopedLongArrayRW values(env, env->NewLongArray(displayIds.size()));
+@@ -192,6 +208,8 @@
+             (void*)nativeDestroyVirtualDisplay },
+     {"nativeOverrideHdrTypes", "(Landroid/os/IBinder;[I)V",
+                 (void*)nativeOverrideHdrTypes },
++    {"nativeGetArrDisplayModeIds", "(J)[I",
++            (void*)nativeGetArrDisplayModeIds },
+     {"nativeGetPhysicalDisplayIds", "()[J",
+             (void*)nativeGetPhysicalDisplayIds },
+     {"nativeGetPhysicalDisplayToken", "(J)Landroid/os/IBinder;",
+--- a/services/core/xsd/display-device-config/display-device-config.xsd
++++ b/services/core/xsd/display-device-config/display-device-config.xsd
+@@ -183,6 +183,10 @@
+                 </xs:element>
+                 <!-- Timeout after which we reduce the refresh rate if the screen has been idle, in order to save power. -->
+                 <xs:element type="idleScreenRefreshRateTimeout" name="idleScreenRefreshRateTimeout" minOccurs="0">
++                    <xs:annotation name="final"/>
++                </xs:element>
++                <!-- Prefer a same-resolution native ARR mode at the default peak rate. -->
++                <xs:element name="preferArrByDefault" type="xs:boolean" minOccurs="0">
+                     <xs:annotation name="final"/>
+                 </xs:element>
+                 <xs:element name="supportsVrr" type="xs:boolean" minOccurs="0">
+--- a/services/core/java/com/android/server/display/DisplayDeviceConfig.java
++++ b/services/core/java/com/android/server/display/DisplayDeviceConfig.java
+@@ -976,6 +976,7 @@
+     private float mBrightnessCapForMinMode;
+ 
+     private boolean mVrrSupportEnabled;
++    private boolean mPreferArrByDefault;
+ 
+     @Nullable
+     private float[] mDozeBrightnessSensorValueToBrightness;
+@@ -1817,6 +1818,10 @@
+     /**
+      * @return true if display supports dvrr
+      */
++    public boolean isArrPreferredByDefault() {
++        return mPreferArrByDefault;
++    }
++
+     public boolean isVrrSupportEnabled() {
+         return mVrrSupportEnabled;
+     }
+@@ -1956,6 +1961,7 @@
+                 ? mEvenDimmerBrightnessData.toString() : "null")
+                 + "\n"
+                 + "mVrrSupported= " + mVrrSupportEnabled + "\n"
++                + "mPreferArrByDefault= " + mPreferArrByDefault + "\n"
+                 + "mDozeBrightnessSensorValueToBrightness= "
+                 + Arrays.toString(mDozeBrightnessSensorValueToBrightness) + "\n"
+                 + "mDefaultDozeBrightness= " + mDefaultDozeBrightness + "\n"
+@@ -2060,6 +2066,7 @@
+                 loadIdleScreenRefreshRateTimeoutConfigs(config);
+                 loadBrightnessCapForMinMode(config);
+                 mVrrSupportEnabled = config.getSupportsVrr();
++                mPreferArrByDefault = Boolean.TRUE.equals(config.getPreferArrByDefault());
+                 loadDozeBrightness(config);
+                 loadFrameRateVelocityMapping(config);
+             } else {
+--- a/services/core/java/com/android/server/display/LocalDisplayAdapter.java
++++ b/services/core/java/com/android/server/display/LocalDisplayAdapter.java
+@@ -303,10 +303,10 @@
+             mPhysicalDisplayId = physicalDisplayId;
+             mIsFirstDisplay = isFirstDisplay;
+             mPort = staticDisplayInfo.port;
++            mBacklightAdapter = mInjector.getBacklightAdapter(displayToken, isFirstDisplay,
++                    mSurfaceControlProxy);
+             updateDisplayPropertiesLocked(staticDisplayInfo, dynamicInfo, modeSpecs);
+             mSidekickInternal = LocalServices.getService(SidekickInternal.class);
+-            mBacklightAdapter = mInjector.getBacklightAdapter(displayToken, isFirstDisplay,
+-                    mSurfaceControlProxy);
+             mActiveSfDisplayModeAtStartId = dynamicInfo.activeDisplayModeId;
+         }
+ 
+@@ -517,23 +517,27 @@
+             if (mDefaultModeId == INVALID_MODE_ID) {
+                 mDefaultModeId = activeRecord.mMode.getModeId();
+                 mDefaultModeGroup = mActiveSfDisplayMode.group;
+-                // Opt in only a verified, same-resolution ARR configuration for this display.
+-                // Keep the normal default when the property or candidate is absent.
+-                final int arrModeId = SystemProperties.getInt(
+-                        "debug.sf.arr_default_mode_" + mPhysicalDisplayId, INVALID_MODE_ID);
+-                for (SurfaceControl.DisplayMode mode : displayModes) {
+-                    if (isInternal && mode.id == arrModeId
+-                            && mode.width == mActiveSfDisplayMode.width
+-                            && mode.height == mActiveSfDisplayMode.height
+-                            && mode.vsyncRate > mode.peakRefreshRate) {
++                if (isInternal && getDisplayDeviceConfig().isArrPreferredByDefault()) {
++                    int[] arrModeIds = mSurfaceControlProxy.getArrDisplayModeIds(mPhysicalDisplayId);
++                    SurfaceControl.DisplayMode preferred = null;
++                    for (SurfaceControl.DisplayMode mode : displayModes) {
++                        if (arrModeIds != null && Arrays.stream(arrModeIds).anyMatch(id -> id == mode.id)
++                                && mode.width == mActiveSfDisplayMode.width
++                                && mode.height == mActiveSfDisplayMode.height
++                                && Math.abs(mode.peakRefreshRate
++                                        - mActiveSfDisplayMode.peakRefreshRate) < 0.01f
++                                && (preferred == null || mode.id < preferred.id)) {
++                            preferred = mode;
++                        }
++                    }
++                    if (preferred != null) {
+                         for (DisplayModeRecord record : records) {
+-                            if (record.hasMatchingMode(mode)) {
++                            if (record.hasMatchingMode(preferred)) {
+                                 mDefaultModeId = record.mMode.getModeId();
+-                                mDefaultModeGroup = mode.group;
++                                mDefaultModeGroup = preferred.group;
+                                 break;
+                             }
+                         }
+-                        break;
+                     }
+                 }
+                 mActiveRenderFrameRate = renderFrameRate;
+@@ -1868,6 +1872,10 @@
+ 
+     @VisibleForTesting
+     public static class SurfaceControlProxy {
++        public int[] getArrDisplayModeIds(long displayId) {
++            return DisplayControl.getArrDisplayModeIds(displayId);
++        }
++
+         public SurfaceControl.DynamicDisplayInfo getDynamicDisplayInfo(long displayId) {
+             return SurfaceControl.getDynamicDisplayInfo(displayId);
+         }

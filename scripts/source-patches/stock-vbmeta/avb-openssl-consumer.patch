@@ -1,0 +1,11 @@
+--- a/Android.bp
++++ b/Android.bp
+@@ -178,6 +178,8 @@
+     },
+     visibility: [
+         "//external/avb:__subpackages__",
++        "//build/make/tools:__pkg__",
++        "//external/erofs-utils:__pkg__",
+     ],
+ }
+ 

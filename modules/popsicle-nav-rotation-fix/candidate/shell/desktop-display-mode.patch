@@ -1,0 +1,111 @@
+--- a/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/desktopfirst/DesktopDisplayModeController.kt
++++ b/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/desktopfirst/DesktopDisplayModeController.kt
+@@ -25,6 +25,7 @@
+ import android.hardware.devicestate.DeviceStateManager
+ import android.hardware.input.InputManager
+ import android.os.Handler
++import android.os.IBinder
+ import android.os.SystemProperties
+ import android.provider.Settings
+ import android.provider.Settings.Global.DEVELOPMENT_FORCE_DESKTOP_MODE_ON_EXTERNAL_DISPLAYS
+@@ -127,6 +128,14 @@
+             }
+         }
+ 
++    private data class PendingDisplayMode(val token: IBinder, val windowingMode: Int)
++
++    // Keep the final request for each display while transitions are busy. In particular, an
++    // A -> B -> A request must not let an unanimated policy update overtake the transition to B.
++    private val pendingDisplayModes = linkedMapOf<Int, PendingDisplayMode>()
++    private val submittedDisplayModes = mutableMapOf<Int, PendingDisplayMode>()
++    private var displayModeUpdateScheduled = false
++
+     init {
+         shellInit.addInitCallback({ onInit() }, this)
+         inputManager.registerInputDeviceListener(inputDeviceListener, mainHandler)
+@@ -137,6 +146,14 @@
+ 
+     private fun onInit() {
+         shellCommandHandler.addDumpCallback(this::dump, this)
++        displayController.addDisplayWindowListener(
++            object : DisplayController.OnDisplaysChangedListener {
++                override fun onDisplayRemoved(displayId: Int) {
++                    pendingDisplayModes.remove(displayId)
++                    submittedDisplayModes.remove(displayId)
++                }
++            }
++        )
+         if (Flags.enableDesktopFirstUserChangeBugfix()) {
+             shellController.addUserChangeListener(
+                 object : UserChangeListener {
+@@ -175,6 +192,37 @@
+     }
+ 
+     private fun updateDisplayWindowingMode(displayId: Int, targetDisplayWindowingMode: Int) {
++        val info = rootTaskDisplayAreaOrganizer.getDisplayAreaInfo(displayId) ?: return
++        pendingDisplayModes[displayId] =
++            PendingDisplayMode(info.token.asBinder(), targetDisplayWindowingMode)
++        scheduleDisplayModeUpdate()
++    }
++
++    private fun scheduleDisplayModeUpdate() {
++        if (displayModeUpdateScheduled || pendingDisplayModes.isEmpty()) return
++        displayModeUpdateScheduled = true
++        // Post before registering: runOnIdle drains all its callbacks even when an earlier
++        // callback starts a transition. Our next request must wait for that new transition too.
++        mainExecutor.executeDelayed({
++            transitions.runOnIdle {
++                displayModeUpdateScheduled = false
++                val entry = pendingDisplayModes.entries.firstOrNull() ?: return@runOnIdle
++                val displayId = entry.key
++                val request = entry.value
++                pendingDisplayModes.remove(displayId)
++                val info = rootTaskDisplayAreaOrganizer.getDisplayAreaInfo(displayId)
++                // A display id can be reused. Never replay an old request against its new TDA.
++                if (info != null && info.token.asBinder() == request.token) {
++                    applyDisplayWindowingMode(displayId, request.windowingMode)
++                } else {
++                    submittedDisplayModes.remove(displayId)
++                }
++                scheduleDisplayModeUpdate()
++            }
++        }, 0)
++    }
++
++    private fun applyDisplayWindowingMode(displayId: Int, targetDisplayWindowingMode: Int) {
+         val tdaInfo = rootTaskDisplayAreaOrganizer.getDisplayAreaInfo(displayId)
+         // A non-organized display (e.g., non-trusted virtual displays used in CTS) doesn't have
+         // TDA.
+@@ -188,13 +236,21 @@
+         }
+         val taskMoveAllowed = targetDisplayWindowingMode == DESKTOP_FIRST_DISPLAY_WINDOWING_MODE
+         val currentDisplayWindowingMode = tdaInfo.configuration.windowConfiguration.windowingMode
+-        if (currentDisplayWindowingMode == targetDisplayWindowingMode) {
++        val submitted = submittedDisplayModes[displayId]
++        val modeConfirmed =
++            submitted == null || submitted.token != tdaInfo.token.asBinder() ||
++                submitted.windowingMode == currentDisplayWindowingMode
++        if (modeConfirmed) submittedDisplayModes.remove(displayId)
++        // Organizer configuration callbacks can lag behind a finished transition. Until the
++        // last submitted mode is observed, include the complete mode request even if the stale
++        // configuration happens to equal the new target (A -> B -> A).
++        if (modeConfirmed && currentDisplayWindowingMode == targetDisplayWindowingMode) {
+             // If the windowing mode is already as needed, just make sure that the task move allowed
+             // bit is set correctly.
+             // LINT.IfChange(setIsTaskMoveAllowed)
+             val wct = WindowContainerTransaction()
+             wct.setIsTaskMoveAllowed(tdaInfo.token, taskMoveAllowed)
+-            transitions.startTransition(TRANSIT_CHANGE, wct, /* handler= */ null)
++            rootTaskDisplayAreaOrganizer.applyTransaction(wct)
+             // LINT.ThenChange(/libs/WindowManager/Shell/src/com/android/wm/shell/desktopmode/multidesks/RootTaskDesksOrganizer.kt:updateTaskMoveAllowed)
+ 
+             // Already in the target mode.
+@@ -233,6 +289,8 @@
+             wct.setWindowingMode(token, WINDOWING_MODE_FULLSCREEN)
+         }
+         transitions.startTransition(TRANSIT_CHANGE, wct, /* handler= */ null)
++        submittedDisplayModes[displayId] =
++            PendingDisplayMode(tdaInfo.token.asBinder(), targetDisplayWindowingMode)
+     }
+ 
+     // Do not directly use this method to check the state of desktop-first mode. Use

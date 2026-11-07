@@ -1,0 +1,94 @@
+// This template is installed next to private original rear-screen inputs by prepare.py.
+package {
+    default_applicable_licenses: ["popsicle_oem_pag_notice"],
+}
+
+license {
+    name: "popsicle_oem_rear_proprietary",
+    visibility: [":__subpackages__"],
+    license_kinds: ["legacy_proprietary"],
+}
+
+license {
+    name: "popsicle_oem_misight_notice",
+    visibility: [":__subpackages__"],
+    license_kinds: ["legacy_notice"],
+    license_text: ["misight-work/NOTICE"],
+}
+
+android_app_import {
+    name: "PopsicleSubscreenCenter",
+    apk: "subscreencenter-personalization.apk",
+    certificate: "platform",
+    system_ext_specific: true,
+    licenses: ["popsicle_oem_rear_proprietary", "popsicle_oem_misight_notice"],
+    optional_uses_libs: [
+        // Original optional Java declaration; the real native module is required below.
+        "libpag.hyperos.so",
+        "popsicle-pag-hyperos",
+        "com.android.extensions.appfunctions",
+        "androidx.window.extensions",
+        "androidx.window.sidecar",
+    ],
+    required: [
+        "popsicle-pag-hyperos",
+        "libpag.hyperos",
+        "libffavc.hyperos",
+        "popsicle-pag-library",
+        "popsicle-pag-public-libraries",
+    ],
+}
+
+license {
+    name: "popsicle_oem_pag_notice",
+    visibility: [":__subpackages__"],
+    license_kinds: ["legacy_notice"],
+    license_text: ["NOTICE"],
+}
+
+dex_import {
+    name: "popsicle-pag-hyperos",
+    stem: "pag-hyperos-release",
+    provides_uses_lib: "pag-hyperos-release.jar",
+    jars: ["pag-hyperos-release.jar"],
+    system_ext_specific: true,
+}
+
+cc_prebuilt_library_shared {
+    name: "libpag.hyperos",
+    srcs: ["libpag.hyperos.so"],
+    system_ext_specific: true,
+    compile_multilib: "64",
+    strip: { none: true },
+    check_elf_files: true,
+    stl: "none",
+    shared_libs: ["liblog", "libandroid", "libjnigraphics", "libffavc.hyperos", "libGLESv2", "libEGL"],
+    system_shared_libs: ["libc", "libm", "libdl"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libffavc.hyperos",
+    srcs: ["libffavc.hyperos.so"],
+    system_ext_specific: true,
+    compile_multilib: "64",
+    strip: { none: true },
+    check_elf_files: true,
+    stl: "none",
+    shared_libs: ["liblog"],
+    system_shared_libs: ["libc", "libm", "libdl"],
+}
+
+prebuilt_etc {
+    name: "popsicle-pag-library",
+    src: "com.android.systemui.libpag.xml",
+    filename_from_src: true,
+    sub_dir: "permissions",
+    system_ext_specific: true,
+}
+
+prebuilt_etc {
+    name: "popsicle-pag-public-libraries",
+    src: "public.libraries-hyperos.txt",
+    filename_from_src: true,
+    system_ext_specific: true,
+}

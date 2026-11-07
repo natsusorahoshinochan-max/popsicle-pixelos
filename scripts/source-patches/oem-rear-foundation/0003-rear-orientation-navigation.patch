@@ -1,0 +1,61 @@
+diff --git a/services/core/java/com/android/server/wm/DisplayRotation.java b/services/core/java/com/android/server/wm/DisplayRotation.java
+--- a/services/core/java/com/android/server/wm/DisplayRotation.java
++++ b/services/core/java/com/android/server/wm/DisplayRotation.java
+@@ -414,6 +414,16 @@
+                 mLandscapeRotation = Surface.ROTATION_90;
+                 mSeascapeRotation = Surface.ROTATION_270;
+             }
++        }
++
++        // The independent rear panel has one physical presentation orientation, including
++        // portrait-only OEM activities. Match the original rear display rotation mapping.
++        if (com.android.internal.display.OemRearDisplay.isRearDisplay(
++                res, mDisplayContent.getDisplayInfo())) {
++            mPortraitRotation = Surface.ROTATION_0;
++            mUpsideDownRotation = Surface.ROTATION_0;
++            mLandscapeRotation = Surface.ROTATION_0;
++            mSeascapeRotation = Surface.ROTATION_0;
+         }
+ 
+         // For demo purposes, allow the rotation of the HDMI display to be controlled.
+diff --git a/services/core/java/com/android/server/wm/DisplayPolicy.java b/services/core/java/com/android/server/wm/DisplayPolicy.java
+--- a/services/core/java/com/android/server/wm/DisplayPolicy.java
++++ b/services/core/java/com/android/server/wm/DisplayPolicy.java
+@@ -708,7 +708,9 @@
+             }
+         } else {
+             mHasStatusBar = false;
+-            mHasNavigationBar = mDisplayContent.isSystemDecorationsSupported();
++            mHasNavigationBar = mDisplayContent.isSystemDecorationsSupported()
++                    && !com.android.internal.display.OemRearDisplay.isRearDisplay(
++                            mContext.getResources(), mDisplayContent.getDisplayInfo());
+         }
+ 
+         mRefreshRatePolicy = new RefreshRatePolicy(mService,
+@@ -815,7 +817,9 @@
+             return;
+         }
+ 
+-        mHasNavigationBar = mDisplayContent.isSystemDecorationsSupported();
++        mHasNavigationBar = mDisplayContent.isSystemDecorationsSupported()
++                && !com.android.internal.display.OemRearDisplay.isRearDisplay(
++                        mContext.getResources(), mDisplayContent.getDisplayInfo());
+     }
+ 
+     public boolean hasStatusBar() {
+diff --git a/services/core/java/com/android/server/wm/ActivityRecord.java b/services/core/java/com/android/server/wm/ActivityRecord.java
+--- a/services/core/java/com/android/server/wm/ActivityRecord.java
++++ b/services/core/java/com/android/server/wm/ActivityRecord.java
+@@ -8162,6 +8162,12 @@
+      * in this method.
+      */
+     private void resolveFixedOrientationConfiguration(@NonNull Configuration newParentConfig) {
++        final DisplayContent display = getDisplayContent();
++        if (display != null && com.android.internal.display.OemRearDisplay.isRearDisplay(
++                mAtmService.mContext.getResources(), display.getDisplayInfo())) {
++            // Original rear activities fill the panel even when their manifest requests portrait.
++            return;
++        }
+         final ConfigOverrideHint overrideHint =
+                 mAppCompatController.getSandboxingPolicy().getResolveConfigHint();
+         final Rect parentBounds = overrideHint.getParentBoundsOverride();

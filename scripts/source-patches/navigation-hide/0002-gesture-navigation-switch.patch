@@ -1,0 +1,175 @@
+diff --git a/res/values/strings.xml b/res/values/strings.xml
+--- a/res/values/strings.xml
++++ b/res/values/strings.xml
+@@ -15590,4 +15590,7 @@
+     <!-- Search keywords for Human interface device access setting -->
+     <string name="keywords_access_hid">hid, human, access, device</string>
+     <!-- Access HID end -->
++    <string name="hide_gesture_navigation_title">Hide gesture navigation bar</string>
++    <string name="hide_gesture_navigation_summary">Hide the bottom bar and use the full screen. Navigation gestures remain available.</string>
++    <string name="hide_gesture_navigation_error">Couldn’t hide the navigation bar. Try again.</string>
+ </resources>
+diff --git a/res/values-zh-rCN/strings.xml b/res/values-zh-rCN/strings.xml
+--- a/res/values-zh-rCN/strings.xml
++++ b/res/values-zh-rCN/strings.xml
+@@ -6231,4 +6231,7 @@
+     <string name="permit_access_hid" msgid="870824396872060949">"允许应用发现人体学接口设备 (HID)"</string>
+     <string name="allow_access_hid_description" msgid="5950783046013896271">"如果您允许访问，恶意应用可能会重新编写人体学接口设备的程序，从而危及您的系统。例如，应用可以在未运行的情况下，模拟键盘或鼠标输入来控制您的系统。请先确保信任应用，再授予访问权限。"</string>
+     <string name="keywords_access_hid" msgid="682455265293135353">"人机交互设备, HID, 访问权限, 设备"</string>
++    <string name="hide_gesture_navigation_title">隐藏手势导航栏</string>
++    <string name="hide_gesture_navigation_summary">隐藏底部横条并使用完整屏幕。导航手势仍可正常使用。</string>
++    <string name="hide_gesture_navigation_error">无法隐藏导航栏，请重试。</string>
+ </resources>
+diff --git a/res/values-zh-rTW/strings.xml b/res/values-zh-rTW/strings.xml
+--- a/res/values-zh-rTW/strings.xml
++++ b/res/values-zh-rTW/strings.xml
+@@ -6231,4 +6231,7 @@
+     <string name="permit_access_hid" msgid="870824396872060949">"允許應用程式尋找人機介面裝置 (HID)"</string>
+     <string name="allow_access_hid_description" msgid="5950783046013896271">"如果允許存取，惡意應用程式可能會竄改 HID，危及系統安全。例如應用程式可能會在未開啟時，模擬你的鍵盤或滑鼠輸入，藉此控制系統。請先確定可信任應用程式，再授予存取權。"</string>
+     <string name="keywords_access_hid" msgid="682455265293135353">"HID, 人機, 存取, 裝置"</string>
++    <string name="hide_gesture_navigation_title">隱藏手勢導覽列</string>
++    <string name="hide_gesture_navigation_summary">隱藏底部橫條並使用完整螢幕。導覽手勢仍可正常使用。</string>
++    <string name="hide_gesture_navigation_error">無法隱藏導覽列，請重試。</string>
+ </resources>
+diff --git a/res/xml/gesture_navigation_settings.xml b/res/xml/gesture_navigation_settings.xml
+--- a/res/xml/gesture_navigation_settings.xml
++++ b/res/xml/gesture_navigation_settings.xml
+@@ -48,6 +48,13 @@
+ 
+     </PreferenceCategory>
+ 
++    <SwitchPreferenceCompat
++        android:key="popsicle_hide_gesture_navigation"
++        android:title="@string/hide_gesture_navigation_title"
++        android:summary="@string/hide_gesture_navigation_summary"
++        android:persistent="false"
++        settings:controller="com.android.settings.gestures.HideGestureNavigationPreferenceController" />
++
+     <PreferenceCategory
+         android:key="back_sensitivity_category"
+         android:persistent="false"
+diff --git a/src/com/android/settings/gestures/HideGestureNavigationPreferenceController.java b/src/com/android/settings/gestures/HideGestureNavigationPreferenceController.java
+new file mode 100644
+--- /dev/null
++++ b/src/com/android/settings/gestures/HideGestureNavigationPreferenceController.java
+@@ -0,0 +1,120 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.settings.gestures;
++
++import android.content.Context;
++import android.content.pm.PackageManager;
++import android.database.ContentObserver;
++import android.os.Handler;
++import android.os.Looper;
++import android.provider.Settings;
++
++import androidx.preference.Preference;
++import androidx.preference.PreferenceScreen;
++
++import com.android.settings.R;
++import com.android.settings.core.TogglePreferenceController;
++import com.android.settingslib.core.lifecycle.LifecycleObserver;
++import com.android.settingslib.core.lifecycle.events.OnPause;
++import com.android.settingslib.core.lifecycle.events.OnResume;
++
++/** Controls gesture handle visibility without changing gesture sensitivity. */
++public class HideGestureNavigationPreferenceController extends TogglePreferenceController
++        implements LifecycleObserver, OnResume, OnPause {
++    private static final String REQUEST = "popsicle_hide_gesture_navigation";
++    private static final String APPLIED = "popsicle_hide_gesture_navigation_applied";
++    private Preference mPreference;
++    private final ContentObserver mObserver = new ContentObserver(new Handler(Looper.getMainLooper())) {
++        @Override
++        public void onChange(boolean selfChange) {
++            if (mPreference != null) {
++                updateState(mPreference);
++            }
++        }
++    };
++
++    public HideGestureNavigationPreferenceController(Context context, String key) {
++        super(context, key);
++    }
++
++    @Override
++    public void displayPreference(PreferenceScreen screen) {
++        super.displayPreference(screen);
++        mPreference = screen.findPreference(getPreferenceKey());
++    }
++
++    @Override
++    public boolean isChecked() {
++        return Settings.Secure.getInt(mContext.getContentResolver(), REQUEST, 0) == 1
++                && Settings.Secure.getInt(mContext.getContentResolver(), APPLIED, 0) != -1;
++    }
++
++    @Override
++    public boolean setChecked(boolean checked) {
++        if (checked && Settings.Secure.getInt(mContext.getContentResolver(), REQUEST, 0) == 1) {
++            // A retry needs a changed request: writing the same value does not notify observers.
++            if (!Settings.Secure.putInt(mContext.getContentResolver(), REQUEST, 0)) {
++                return false;
++            }
++        }
++        return Settings.Secure.putInt(mContext.getContentResolver(), REQUEST, checked ? 1 : 0);
++    }
++
++    @Override
++    public CharSequence getSummary() {
++        return mContext.getText(Settings.Secure.getInt(mContext.getContentResolver(), APPLIED, 0) == -1
++                ? R.string.hide_gesture_navigation_error : R.string.hide_gesture_navigation_summary);
++    }
++
++    @Override
++    public int getAvailabilityStatus() {
++        if (!SystemNavigationPreferenceController.isGestureAvailable(mContext)) {
++            return UNSUPPORTED_ON_DEVICE;
++        }
++        try {
++            mContext.getPackageManager().getApplicationInfo(
++                    "org.pixelos.popsicle.navigation.framework", 0);
++            mContext.getPackageManager().getApplicationInfo(
++                    "org.pixelos.popsicle.navigation.launcher", 0);
++        } catch (PackageManager.NameNotFoundException e) {
++            return UNSUPPORTED_ON_DEVICE;
++        }
++        return SystemNavigationPreferenceController.isGestureNavigationEnabled(mContext)
++                ? AVAILABLE : CONDITIONALLY_UNAVAILABLE;
++    }
++
++    @Override
++    public int getSliceHighlightMenuRes() {
++        return R.string.menu_key_system;
++    }
++
++    @Override
++    public void onResume() {
++        mContext.getContentResolver().registerContentObserver(Settings.Secure.getUriFor(REQUEST),
++                false, mObserver);
++        mContext.getContentResolver().registerContentObserver(Settings.Secure.getUriFor(APPLIED),
++                false, mObserver);
++        if (mPreference != null) {
++            updateState(mPreference);
++        }
++    }
++
++    @Override
++    public void onPause() {
++        mContext.getContentResolver().unregisterContentObserver(mObserver);
++    }
++}

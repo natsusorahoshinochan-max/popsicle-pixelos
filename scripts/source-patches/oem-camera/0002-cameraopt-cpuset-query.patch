@@ -1,0 +1,79 @@
+diff --git a/libprocessgroup/include/processgroup/sched_policy.h b/libprocessgroup/include/processgroup/sched_policy.h
+index 1b6ea66..1586b65 100644
+--- a/libprocessgroup/include/processgroup/sched_policy.h
++++ b/libprocessgroup/include/processgroup/sched_policy.h
+@@ -70,6 +70,17 @@ extern int set_sched_policy(int tid, SchedPolicy policy);
+  */
+ extern int get_sched_policy(int tid, SchedPolicy* policy);
+ 
++#if defined(__ANDROID__)
++/* Original camera ABI: read cpuset first, then cpu for an empty/unrecognized
++ * cpuset group. Zero tid selects the current thread. Returns 0 or -1 on error.
++ * OEM groups may return policy numbers outside the upstream SP_* array range;
++ * this query does not make those values valid for the upstream policy setters.
++ * The policy pointer must be non-null and is unchanged on failure.
++ */
++extern int get_cpuset_policy(int tid, SchedPolicy* policy);
++#endif
++
++
+ /* Return a displayable string corresponding to policy.
+  * Return value: NUL-terminated name of unspecified length, nullptr if invalid;
+  * the caller is responsible for displaying the useful part of the string.
+diff --git a/libprocessgroup/sched_policy.cpp b/libprocessgroup/sched_policy.cpp
+index 042bcd2..1e224bc 100644
+--- a/libprocessgroup/sched_policy.cpp
++++ b/libprocessgroup/sched_policy.cpp
+@@ -195,6 +195,52 @@ static int get_sched_policy_from_group(const std::string& group, SchedPolicy* po
+     return 0;
+ }
+ 
++// Keep OEM-only policy numbers local to this reader. They must not expand the
++// upstream policy arrays or change get_sched_policy()/set_sched_policy().
++static int get_camera_cpuset_policy_from_group(const std::string& group, SchedPolicy* policy) {
++    if (group == "audio-app") {
++        *policy = SP_AUDIO_APP;
++    } else if (group.find("camera-daemon") != std::string::npos) {
++        *policy = static_cast<SchedPolicy>(9);
++    } else if (group == "display") {
++        *policy = static_cast<SchedPolicy>(12);
++    } else if (group == "audio") {
++        *policy = static_cast<SchedPolicy>(13);
++    } else if (group == "touch") {
++        *policy = static_cast<SchedPolicy>(14);
++    } else if (group == "l-background") {
++        *policy = static_cast<SchedPolicy>(15);
++    } else {
++        return get_sched_policy_from_group(group, policy);
++    }
++    return 0;
++}
++
++int get_cpuset_policy(pid_t tid, SchedPolicy* policy) {
++    if (tid == 0) {
++        tid = GetThreadId();
++    }
++
++    std::string group;
++    if (cpusets_enabled()) {
++        if (getCGroupSubsys(tid, "cpuset", group) < 0) {
++            LOG(ERROR) << "Failed to find cpuset cgroup for tid " << tid;
++            return -1;
++        }
++        if (!group.empty()) {
++            if (get_camera_cpuset_policy_from_group(group, policy) == 0) {
++                return 0;
++            }
++            group.clear();
++        }
++    }
++    if (cpuctl_enabled() && getCGroupSubsys(tid, "cpu", group) < 0) {
++        LOG(ERROR) << "Failed to find cpu cgroup for tid " << tid;
++        return -1;
++    }
++    return get_camera_cpuset_policy_from_group(group, policy);
++}
++
+ int get_sched_policy(pid_t tid, SchedPolicy* policy) {
+     if (tid == 0) {
+         tid = GetThreadId();

@@ -1,0 +1,13 @@
+--- a/scripts/managed_vendor_build_prop.py
++++ b/scripts/managed_vendor_build_prop.py
+@@ -62,8 +62,8 @@
+     require(partition in {"vendor", "odm", "odm_dlkm", "vendor_dlkm", "system_dlkm"}, "unsupported managed property partition")
+     require(partition != "vendor" or system_prop is not None,
+             "managed OEM vendor properties require actual system_build_prop")
+-    require(config.get("Debuggable") is True and not config.get("Eng"),
+-            f"managed OEM {partition} properties require userdebug")
++    require(type(config.get("Debuggable", False)) is bool and not config.get("Eng"),
++            f"managed OEM {partition} properties require user or userdebug")
+     require(config.get("PropertySplitEnabled") is True,
+             f"managed OEM {partition} properties require split partition properties")
+     require(not config.get("BuildBrokenDupSysprop"), "ambiguous duplicate-property mode is unsupported")

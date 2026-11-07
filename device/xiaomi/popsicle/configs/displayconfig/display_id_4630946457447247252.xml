@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<displayConfiguration>
+    <densityMapping>
+        <density>
+            <height>596</height>
+            <width>976</width>
+            <density>450</density>
+        </density>
+    </densityMapping>
+    <screenBrightnessMap>
+        <point>
+            <value>0.000366256</value>
+            <nits>1.0</nits>
+        </point>
+        <point>
+            <value>0.374862654</value>
+            <nits>600.0</nits>
+        </point>
+        <point>
+            <value>0.499938957</value>
+            <nits>800.0</nits>
+        </point>
+        <point>
+            <value>0.824014162</value>
+            <nits>2000.0</nits>
+        </point>
+        <point>
+            <value>1.0</value>
+            <nits>3500.0</nits>
+        </point>
+    </screenBrightnessMap>
+    <highBrightnessMode enabled="true">
+        <transitionPoint>0.374862654</transitionPoint>
+        <minimumLux>4475</minimumLux>
+        <timing>
+            <timeWindowSecs>0</timeWindowSecs>
+            <timeMaxSecs>0</timeMaxSecs>
+            <timeMinSecs>0</timeMinSecs>
+        </timing>
+        <allowInLowPowerMode>true</allowInLowPowerMode>
+        <minimumHdrPercentOfScreen>0</minimumHdrPercentOfScreen>
+        <sdrHdrRatioMap>
+            <point>
+                <sdrNits>2.0</sdrNits>
+                <hdrRatio>8.0</hdrRatio>
+            </point>
+            <point>
+                <sdrNits>1800.0</sdrNits>
+                <hdrRatio>8.0</hdrRatio>
+            </point>
+        </sdrHdrRatioMap>
+    </highBrightnessMode>
+    <!-- Match the original rear policy: proximity does not directly blank this display. -->
+    <independentProximitySensor>false</independentProximitySensor>
+    <proxSensor>
+        <type>xiaomi.sensor.proxmity_back</type>
+        <name>tcs3760_sec_back Proximity Back Sensor Wakeup</name>
+    </proxSensor>
+
+    <lightSensor>
+        <type>xiaomi.sensor.back_lux</type>
+        <name>tcs3760_sec_back Ambient Light Back Sensor Wakeup</name>
+    </lightSensor>
+    <!-- Keep framework history horizons, which cover its 4 s / 8 s debounce. -->
+</displayConfiguration>

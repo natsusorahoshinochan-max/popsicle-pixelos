@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Installed beside the private inputs by apply.sh; no proprietary bytes here.
+android_filesystem_prebuilt {
+    name: "mi_product",
+    partition_name: "mi_product",
+    type: "erofs",
+    src: "prebuilt/firmware-a17/mi_product.img",
+}

@@ -1,0 +1,64 @@
+--- a/cmds/installd/OemRearStorage.h
++++ b/cmds/installd/OemRearStorage.h
+@@ -92,6 +92,18 @@
+     return label == nullptr ? 0 : fsetfilecon(fd, label);
+ }
+ 
++inline int checkSystemDataLabel(int fd) {
++    char* context = nullptr;
++    if (fgetfilecon(fd, &context) < 0) return -1;
++    const bool matches = std::string(context) == "u:object_r:system_data_file:s0";
++    freecon(context);
++    if (!matches) {
++        errno = EINVAL;
++        return -1;
++    }
++    return 0;
++}
++
+ // The caller is installd's validated, package/user-locked app-data lifecycle.
+ // Parents remain system-owned; only the application subtree is writable by the app.
+ inline base::unique_fd prepareDirectory(int parent, const std::string& name, uid_t uid,
+@@ -112,7 +124,11 @@
+         }
+         if (migrateOwnership(fd.get(), previousUid, uid) != 0) return {};
+     }
+-    if (fchown(fd.get(), uid, uid) != 0 || fsetfilecon(fd.get(), label) != 0
++    // System-owned ancestors inherit system_data_file. Verify it without
++    // requesting a relabel permission that installd neither has nor needs.
++    const int labeled = uid == AID_SYSTEM ? checkSystemDataLabel(fd.get())
++                                         : fsetfilecon(fd.get(), label);
++    if (labeled != 0 || fchown(fd.get(), uid, uid) != 0
+             || fchmod(fd.get(), mode) != 0) {
+         return {};
+     }
+@@ -137,15 +153,15 @@
+     if (fgetfilecon(app.get(), &original) < 0) return -1;
+     const std::string originalLabel(original);
+     freecon(original);
+-    // This exact seapp mapping uses app_data_file. Preserve the entire
+-    // kernel-validated MLS suffix; no category calculation or context_* ABI.
++    // Retain the existing platform-app sandbox and its complete data context,
++    // including the kernel-validated MLS suffix. UID/mode isolate the leaf
++    // exactly as they do the original application's data directory.
+     const std::string prefix = "u:object_r:app_data_file:";
+     if (originalLabel.compare(0, prefix.size(), prefix) != 0) {
+         errno = EINVAL;
+         return -1;
+     }
+-    const auto appLabel = "u:object_r:popsicle_rear_theme_data_file:"
+-            + originalLabel.substr(prefix.size());
++    const auto& appLabel = originalLabel;
+ 
+     base::unique_fd system(open(systemDataPath.c_str(),
+                                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+@@ -155,7 +171,8 @@
+         errno = EPERM;
+         return -1;
+     }
+-    constexpr const char* parentLabel = "u:object_r:popsicle_rear_theme_parent_file:s0";
++    if (checkSystemDataLabel(system.get()) != 0) return -1;
++    constexpr const char* parentLabel = "u:object_r:system_data_file:s0";
+     auto theme = prepareDirectory(system.get(), "theme_magic", AID_SYSTEM, 0711, parentLabel);
+     if (theme.get() < 0) return -1;
+     auto users = prepareDirectory(theme.get(), "users", AID_SYSTEM, 0711, parentLabel);

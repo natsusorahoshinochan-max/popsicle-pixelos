@@ -1,0 +1,170 @@
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -8091,4 +8091,6 @@
+     <bool name="config_oemRearSmartAssistantSupported">false</bool>
+     <bool name="config_enableOemCameraActivityScene">false</bool>
+     <bool name="config_enableOemProcessPolicy">false</bool>
++    <!-- Same-firmware Xiaomi prebaked effect IDs; HAL support is checked separately. -->
++    <bool name="config_enableOemHapticEffects">false</bool>
+ </resources>
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -6634,4 +6634,5 @@
+     <java-symbol type="bool" name="config_oemRearSmartAssistantSupported" />
+     <java-symbol type="bool" name="config_enableOemCameraActivityScene" />
+   <java-symbol type="bool" name="config_enableOemProcessPolicy" />
++    <java-symbol type="bool" name="config_enableOemHapticEffects" />
+ </resources>
+diff --git a/core/res/popsicle-resource-ids.txt b/core/res/popsicle-resource-ids.txt
+--- a/core/res/popsicle-resource-ids.txt
++++ b/core/res/popsicle-resource-ids.txt
+@@ -3,3 +3,4 @@
+ android:string/config_oemRearDisplayUniqueId = 0x01040bdf
+ android:string/config_oemRearHomeComponent = 0x01040be0
+ android:bool/config_enableOemProcessPolicy = 0x01110327
++android:bool/config_enableOemHapticEffects = 0x01110328
+diff --git a/core/java/android/os/vibrator/PrebakedSegment.java b/core/java/android/os/vibrator/PrebakedSegment.java
+--- a/core/java/android/os/vibrator/PrebakedSegment.java
++++ b/core/java/android/os/vibrator/PrebakedSegment.java
+@@ -226,7 +226,11 @@
+                 break;
+             default:
+                 int[] ringtones = VibrationEffect.RINGTONES;
+-                if (mEffectId < ringtones[0] || mEffectId > ringtones[ringtones.length - 1]) {
++                final boolean oemEffect = mEffectId >= 0 && mEffectId <= 999
++                        && android.content.res.Resources.getSystem().getBoolean(
++                                com.android.internal.R.bool.config_enableOemHapticEffects);
++                if (!oemEffect && (mEffectId < ringtones[0]
++                        || mEffectId > ringtones[ringtones.length - 1])) {
+                     throw new IllegalArgumentException(
+                             "Unknown prebaked effect type (value=" + mEffectId + ")");
+                 }
+diff --git a/core/java/miui/util/HapticFeedbackUtil.java b/core/java/miui/util/HapticFeedbackUtil.java
+new file mode 100644
+--- /dev/null
++++ b/core/java/miui/util/HapticFeedbackUtil.java
+@@ -0,0 +1,122 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package miui.util;
++
++import android.content.Context;
++import android.os.SystemProperties;
++import android.os.UserHandle;
++import android.os.VibrationAttributes;
++import android.os.VibrationEffect;
++import android.os.Vibrator;
++import android.provider.Settings;
++import android.util.Log;
++
++/**
++ * Original linear-motor API consumed by the rear app. Effects retain their original HAL IDs.
++ * @hide
++ */
++public class HapticFeedbackUtil {
++    private static final String TAG = "HapticFeedbackUtil";
++    private static final VibrationAttributes TOUCH = new VibrationAttributes.Builder()
++            .setUsage(VibrationAttributes.USAGE_TOUCH).build();
++    private static final VibrationAttributes HARDWARE = new VibrationAttributes.Builder()
++            .setUsage(VibrationAttributes.USAGE_HARDWARE_FEEDBACK).build();
++
++    private final Context mContext;
++    private final Vibrator mVibrator;
++    private final boolean mLinearMotor;
++
++    public HapticFeedbackUtil(Context context, boolean onceOnly) {
++        mContext = context;
++        mVibrator = context.getSystemService(Vibrator.class);
++        mLinearMotor = isSupportLinearMotorVibrate();
++        // The original linear-motor constructor does not observe intensity settings;
++        // onceOnly controls only its non-linear waveform implementation.
++    }
++
++    public static boolean isSupportLinearMotorVibrate() {
++        return "linear".equals(SystemProperties.get("sys.haptic.motor"));
++    }
++
++    public static boolean isSupportLinearMotorVibrate(int flag) {
++        if (!isSupportLinearMotorVibrate()) {
++            return false;
++        }
++        final String property = switch (flag) {
++            case 0x1 -> "sys.haptic.down";
++            case 0x0 -> "sys.haptic.long.press";
++            case 0x3 -> "sys.haptic.tap.normal";
++            case 0x10000000 -> "sys.haptic.tap.normal";
++            case 0x10000001 -> "sys.haptic.tap.light";
++            case 0x10000002 -> "sys.haptic.flick";
++            case 0x1000000d -> "sys.haptic.flick.light";
++            case 0x10000003 -> "sys.haptic.switch";
++            case 0x10000004 -> "sys.haptic.mesh.heavy";
++            case 0x10000005 -> "sys.haptic.mesh.normal";
++            case 0x10000006 -> "sys.haptic.mesh.light";
++            case 0x10000007 -> "sys.haptic.long.press";
++            case 0x10000008 -> "sys.haptic.popup.normal";
++            case 0x10000009 -> "sys.haptic.popup.light";
++            case 0x1000000a -> "sys.haptic.pickup";
++            case 0x1000000b -> "sys.haptic.scroll.edge";
++            case 0x1000000c -> "sys.haptic.trigger.drawer";
++            case 0x1000000e -> "sys.haptic.hold";
++            case 0x9 -> "sys.haptic.mesh.light";
++            case 0x1000000f -> "sys.haptic.boundary_spatial";
++            case 0x10000010 -> "sys.haptic.boundary_time";
++            case 0x10000011 -> "sys.haptic.button_large";
++            case 0x10000012 -> "sys.haptic.button_middle";
++            case 0x10000013 -> "sys.haptic.button_small";
++            case 0x10000014 -> "sys.haptic.gear_light";
++            case 0x10000015 -> "sys.haptic.gear_heavy";
++            case 0x10000016 -> "sys.haptic.keyboard";
++            case 0x10000017 -> "sys.haptic.alert";
++            case 0x10000018 -> "sys.haptic.zaxis_switch";
++            default -> null;
++        };
++        return property != null && !SystemProperties.get(property).isEmpty();
++    }
++
++    public boolean isSupportExtHapticFeedback(int effectId) {
++        return mLinearMotor && mVibrator != null
++                && mVibrator.areEffectsSupported(effectId)[0]
++                        == Vibrator.VIBRATION_EFFECT_SUPPORT_YES;
++    }
++
++    private boolean isHapticsDisabled() {
++        return Settings.System.getIntForUser(mContext.getContentResolver(),
++                "haptic_feedback_enabled", 0, UserHandle.USER_CURRENT_OR_SELF) == 0;
++    }
++
++    public boolean performExtHapticFeedback(int effectId) {
++        return performExtHapticFeedback(effectId, !isHapticsDisabled());
++    }
++
++    public boolean performExtHapticFeedback(int effectId, boolean always) {
++        if ((!always && isHapticsDisabled()) || !isSupportExtHapticFeedback(effectId)) {
++            return false;
++        }
++        try {
++            mVibrator.vibrate(VibrationEffect.get(effectId), always ? HARDWARE : TOUCH);
++            // Matches the original dispatch result; the vibrator service decides scheduling.
++            return true;
++        } catch (IllegalArgumentException e) {
++            Log.e(TAG, "performExtHapticFeedback: ", e);
++            return false;
++        }
++    }
++}

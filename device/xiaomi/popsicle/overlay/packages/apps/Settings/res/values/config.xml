@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- mifaced receives the preview Surface and owns camera1 during enrollment. -->
+    <bool name="config_face_enroll_preview_from_hal">true</bool>
+</resources>

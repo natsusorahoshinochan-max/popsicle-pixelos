@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+vendor/pixel/gms 7feb3322ac4a0849f32d8b95e565e73cf6774a20 0001-android17-nobatt.patch

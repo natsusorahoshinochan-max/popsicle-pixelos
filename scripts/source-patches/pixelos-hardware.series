@@ -1,0 +1,10 @@
+# Fixed PixelOS ROM production patch order.
+packages/apps/Aperture cf1bc0a72524318d0e06ebe938a20b170f1eb878 camera-extensions/0001-aperture-cache-input.patch
+packages/apps/Aperture cf1bc0a72524318d0e06ebe938a20b170f1eb878 aperture-zoom/0001-release-unbound-zoom-path.patch
+packages/apps/Settings cee0f8941ad81fcb86b13ce90268eca3b69c5282 biometrics/0001-face-hal-preview.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 biometrics/0002-ultrasonic-touch-lifecycle.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 biometrics/0003-ultrasonic-overlay-notification.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 biometrics/0004-ultrasonic-overlay-hidden.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 biometrics/0005-keyguard-off-display-transition.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 display-hbm/0001-own-hbm-timeout-lifecycle.patch
+frameworks/base db291d9dc8bd8bd951edc117fdedbdf332118e48 display-hbm/0002-independent-secondary-proximity.patch

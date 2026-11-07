@@ -1,0 +1,18 @@
+{
+  "r8_version": "9.3.19",
+  "r8_source": "3fa7fd9757375305abc3b898378d260f2f88e97c",
+  "r8_repository_head": "65fe8f9f5c6769d35f91fe67b786b767a2db5249",
+  "apk_sha256": "1c2c35361830a8fa755a923ee941085d38f3165f5226556ba4432352fd107031",
+  "generated_jar_sha256": "09ba6343ddcead746a24281553438cabc85e0a15f2adad470bb8674744e86581",
+  "dex2jar_source_commit": "b5bda4fb4935ae8b3869b422454ae3b3896c7bc1",
+  "dex2jar_version": "2.4",
+  "dex2jar_zip_sha256": "ee7c45eb3c1d2474a6145d8d447e651a736a22d9664b6d3d3be5a5a817dda23a",
+  "r8_files": {
+    "r8.spdx.json": ["r8.spdx.json", "9ce74f4cbd27e8050041d60f00731ca9ea3c448a774443c402d58c157d6819fb", "27d85290ab8e29141b965b3efd4d2b3b5655afdb5d2f2e4f267fbd69f0fe41f2"],
+    "r8.jar": ["r8lib.jar", "49a6139b96a272482570cb8f32685cc89c27f2457e5d0ec9f447689e52ec9779", "4033e1b2a688decf1becb4e9e2f6d921f04e8fe002547a049c61b234ea301c39"],
+    "r8.jar.map": ["r8lib.jar.map", "3f15043be876d9545077155895ea58a91e863d7a9b8e54fda9f1fd34459e1793", "bc8f9ecae621dddeeef387bc0d7209c780cdc019cd9432c477711a32a11bd3a0"],
+    "keepanno-annotations.jar": ["keepanno-annotations.jar", "85925982c269c0c3a1edc121cfc5cf3dbde86e869bdcaa5f0fb9acd1d84181a9", "fa08b1820c54c6a657d5883526d62559122bdb6cc66ce8f466e77cc0359d9366"],
+    "keepanno-annotations-androidx.jar": ["keepanno-annotations-androidx.jar", "2b6508aa8fb17fc1b3ba9d392b5e5f52c0beaf960ac2e23405aec06ea9b02782", "e8e3a31511c49c4296960680bba643f02ea4e0c26e20307366b559f4869e34b7"],
+    "keepanno-annotations-legacy.jar": ["keepanno-annotations-legacy.jar", "cf6b2cd3d32eb77454954313e6c1a3a7e0cab64e11360d2e7ae0fe8a69a250f9", "fa08b1820c54c6a657d5883526d62559122bdb6cc66ce8f466e77cc0359d9366"]
+  }
+}

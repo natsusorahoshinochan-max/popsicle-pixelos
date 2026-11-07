@@ -1,0 +1,120 @@
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/XiaomiFingerprintTouchController.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/XiaomiFingerprintTouchController.java
+@@ -70,8 +70,12 @@
+         return true;
+     }
+ 
+-    synchronized boolean onOverlayShown(Object owner) {
+-        return mOwner == owner && mRunning && send(1, 1);
++    synchronized boolean onOverlayVisibility(Object owner, boolean visible) {
++        // Late UI callbacks must not change the successor's touch state.
++        if (mOwner != owner || !mRunning) {
++            return true;
++        }
++        return send(1, visible ? 1 : 0);
+     }
+ 
+     synchronized boolean onEnrollmentProgress(Object owner, int remaining) {
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintEnrollClient.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintEnrollClient.java
+@@ -365,8 +365,10 @@
+ 
+     @Override
+     public void onUdfpsUiEvent(@FingerprintManager.UdfpsUiEvent int event) {
+-        if (event == FingerprintManager.UDFPS_UI_OVERLAY_SHOWN && mTouchController != null
+-                && !mTouchController.onOverlayShown(this)) {
++        if ((event == FingerprintManager.UDFPS_UI_OVERLAY_SHOWN
++                || event == FingerprintManager.UDFPS_UI_OVERLAY_HIDDEN) && mTouchController != null
++                && !mTouchController.onOverlayVisibility(this,
++                        event == FingerprintManager.UDFPS_UI_OVERLAY_SHOWN)) {
+             Slog.e(TAG, "Unable to notify fingerprint overlay visibility");
+             onError(android.hardware.biometrics.BiometricFingerprintConstants
+                     .FINGERPRINT_ERROR_HW_UNAVAILABLE, 0 /* vendorCode */);
+@@ -380,6 +382,8 @@
+                 case FingerprintManager.UDFPS_UI_READY:
+                     getFreshDaemon().getSession().onUiReady();
+                     break;
++                case FingerprintManager.UDFPS_UI_OVERLAY_HIDDEN:
++                    break;
+                 default:
+                     Slog.w(TAG, "No matching event for onUdfpsUiEvent");
+             }
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintAuthenticationClient.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintAuthenticationClient.java
+@@ -430,8 +430,10 @@
+ 
+     @Override
+     public void onUdfpsUiEvent(@FingerprintManager.UdfpsUiEvent int event) {
+-        if (event == FingerprintManager.UDFPS_UI_OVERLAY_SHOWN && mTouchController != null
+-                && !mTouchController.onOverlayShown(this)) {
++        if ((event == FingerprintManager.UDFPS_UI_OVERLAY_SHOWN
++                || event == FingerprintManager.UDFPS_UI_OVERLAY_HIDDEN) && mTouchController != null
++                && !mTouchController.onOverlayVisibility(this,
++                        event == FingerprintManager.UDFPS_UI_OVERLAY_SHOWN)) {
+             Slog.e(TAG, "Unable to notify fingerprint overlay visibility");
+             onError(android.hardware.biometrics.BiometricFingerprintConstants
+                     .FINGERPRINT_ERROR_HW_UNAVAILABLE, 0 /* vendorCode */);
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintDetectClient.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintDetectClient.java
+@@ -86,8 +86,8 @@
+         mTouchController = controller;
+     }
+ 
+-    void onOverlayShown() {
+-        if (mTouchController != null && !mTouchController.onOverlayShown(this)) {
++    void onOverlayVisibility(boolean visible) {
++        if (mTouchController != null && !mTouchController.onOverlayVisibility(this, visible)) {
+             Slog.e(TAG, "Unable to notify fingerprint detection overlay");
+             onError(android.hardware.biometrics.BiometricFingerprintConstants
+                     .FINGERPRINT_ERROR_HW_UNAVAILABLE, 0 /* vendorCode */);
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java
+@@ -786,8 +786,10 @@
+         mFingerprintSensors.get(sensorId).getScheduler().getCurrentClientIfMatches(
+                 requestId, (client) -> {
+                     if (client instanceof FingerprintDetectClient
+-                            && event == FingerprintManager.UDFPS_UI_OVERLAY_SHOWN) {
+-                        ((FingerprintDetectClient) client).onOverlayShown();
++                            && (event == FingerprintManager.UDFPS_UI_OVERLAY_SHOWN
++                                    || event == FingerprintManager.UDFPS_UI_OVERLAY_HIDDEN)) {
++                        ((FingerprintDetectClient) client).onOverlayVisibility(
++                                event == FingerprintManager.UDFPS_UI_OVERLAY_SHOWN);
+                         return;
+                     }
+                     if (!(client instanceof Udfps)) {
+--- a/core/java/android/hardware/fingerprint/FingerprintManager.java
++++ b/core/java/android/hardware/fingerprint/FingerprintManager.java
+@@ -129,10 +129,16 @@
+      */
+     public static final int UDFPS_UI_READY = 2;
+ 
+-    /**
+-     * @hide
+-     */
+-    @IntDef({UDFPS_UI_OVERLAY_SHOWN, UDFPS_UI_READY})
++    /**
++     * The overlay has been removed.
++     * @hide
++     */
++    public static final int UDFPS_UI_OVERLAY_HIDDEN = 3;
++
++    /**
++     * @hide
++     */
++    @IntDef({UDFPS_UI_OVERLAY_SHOWN, UDFPS_UI_READY, UDFPS_UI_OVERLAY_HIDDEN})
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface UdfpsUiEvent{}
+ 
+--- a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
++++ b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
+@@ -883,6 +883,10 @@
+                 onFingerUp(mOverlay.getRequestId(), oldView);
+             }
+             final boolean removed = mOverlay.hide();
++            if (mFingerprintManager != null) {
++                mFingerprintManager.onUdfpsUiEvent(FingerprintManager.UDFPS_UI_OVERLAY_HIDDEN,
++                        mOverlay.getRequestId(), mSensorProps.sensorId);
++            }
+             mKeyguardViewManager.hideAlternateBouncer(
+                     /* updateScrim */ true,
+                     /* clearDismissAction */ false

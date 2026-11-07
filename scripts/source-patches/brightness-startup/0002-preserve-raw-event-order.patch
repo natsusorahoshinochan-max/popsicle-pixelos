@@ -1,0 +1,13 @@
+diff --git a/services/core/java/com/android/server/display/AutomaticBrightnessController.java b/services/core/java/com/android/server/display/AutomaticBrightnessController.java
+--- a/services/core/java/com/android/server/display/AutomaticBrightnessController.java
++++ b/services/core/java/com/android/server/display/AutomaticBrightnessController.java
+@@ -814,8 +814,7 @@
+                 mAwaitingStartupSample = false;
+             } else if (time >= mLightSensorEnableElapsedTime
+                     && now - time <= STARTUP_SAMPLE_MAX_AGE_MILLIS
+-                    && time > mAmbientLightRingBuffer.getTime(
+-                            mAmbientLightRingBuffer.size() - 1)) {
++                    && eventTime > mLastObservedLuxTime) {
+                 mAwaitingStartupSample = false;
+                 mStartupLuxCorrection = true;
+                 mAmbientLightRingBuffer.clear();

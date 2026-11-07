@@ -1,0 +1,2 @@
+# Fixed PixelOS ROM production patch order.
+packages/modules/Telephony d83f23a96fbe6d68942d8d7245dbd3db91e9c711 0002-telephony-telecom-api.patch

@@ -1,0 +1,45 @@
+# Host configuration and editor state
+.DS_Store
+._*
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+.env
+.env.*
+!.env.example
+
+# Local toolchains, firmware, research inputs and generated outputs
+/.repo/
+/source/
+/platform-tools/
+/downloads/
+/artifacts/
+/evidence/
+/.scratch/
+/tmp/
+/out/
+/out-*/
+/dist/
+/ccache/
+/vendor/xiaomi/popsicle-private/prebuilt/
+/vendor/xiaomi/popsicle-private/proprietary/
+/vendor/xiaomi/popsicle-images/prebuilt/
+
+# Private signing material
+/keys/
+/release-keys/
+/signing-keys/
+*.pk8
+*.jks
+*.keystore
+*.p12
+*.pfx
+
+# Host caches and logs
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log

@@ -1,0 +1,662 @@
+diff --git a/packages/SystemUI/AndroidManifest.xml b/packages/SystemUI/AndroidManifest.xml
+--- a/packages/SystemUI/AndroidManifest.xml
++++ b/packages/SystemUI/AndroidManifest.xml
+@@ -21,6 +21,8 @@
+     android:sharedUserId="android.uid.systemui"
+     xmlns:tools="http://schemas.android.com/tools"
+     coreApp="true">
++
++    <uses-permission android:name="com.xiaomi.subscreencenter.SubScreenService.BIND_SERVICE" />
+ 
+     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+ 
+diff --git a/packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java b/packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java
+--- a/packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java
++++ b/packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java
+@@ -15,6 +15,8 @@
+  */
+ 
+ package com.android.systemui.dagger;
++
++import com.android.systemui.subscreen.OemRearServiceModule;
+ 
+ import static com.android.systemui.Dependency.ALLOW_NOTIFICATION_LONG_PRESS_NAME;
+ import static com.android.systemui.Dependency.LEAK_REPORT_EMAIL_NAME;
+@@ -136,6 +138,7 @@
+  * SystemUI code that variants of SystemUI _must_ include to function correctly.
+  */
+ @Module(includes = {
++        OemRearServiceModule.class,
+         AccessibilityModule.class,
+         AccessibilityRepositoryModule.class,
+         AospPolicyModule.class,
+diff --git a/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/LegacyMediaDataFilterImpl.kt b/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/LegacyMediaDataFilterImpl.kt
+--- a/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/LegacyMediaDataFilterImpl.kt
++++ b/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/LegacyMediaDataFilterImpl.kt
+@@ -160,6 +160,8 @@
+     fun hasActiveMedia() = userEntries.any { it.value.active }
+ 
+     /** Are there any media entries we should display? */
++    fun getCurrentUserMedia(): Map<String, MediaData> = userEntries.mapValues { it.value.copy() }
++
+     fun hasAnyMedia() = userEntries.isNotEmpty()
+ 
+     /** Add a listener for filtered [MediaData] changes */
+diff --git a/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/LegacyMediaDataManagerImpl.kt b/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/LegacyMediaDataManagerImpl.kt
+--- a/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/LegacyMediaDataManagerImpl.kt
++++ b/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/LegacyMediaDataManagerImpl.kt
+@@ -450,6 +450,9 @@
+         }
+ 
+     /** Add a listener for changes in this class */
++    override fun getCurrentUserMedia(): Map<String, MediaData> =
++        mediaDataFilter.getCurrentUserMedia()
++
+     override fun addListener(listener: MediaDataManager.Listener) {
+         // mediaDataFilter is the current end of the internal pipeline. Register external
+         // listeners as listeners to it.
+diff --git a/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/MediaDataManager.kt b/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/MediaDataManager.kt
+--- a/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/MediaDataManager.kt
++++ b/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/MediaDataManager.kt
+@@ -28,6 +28,9 @@
+ 
+     /** Add a listener for changes in this class */
+     fun addListener(listener: Listener) {}
++
++    /** Current filtered entries, copied on the main thread for a newly attached consumer. */
++    fun getCurrentUserMedia(): Map<String, MediaData>
+ 
+     /** Remove a listener for changes in this class */
+     fun removeListener(listener: Listener) {}
+diff --git a/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/interactor/MediaCarouselInteractor.kt b/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/interactor/MediaCarouselInteractor.kt
+--- a/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/interactor/MediaCarouselInteractor.kt
++++ b/packages/SystemUI/src/com/android/systemui/media/controls/domain/pipeline/interactor/MediaCarouselInteractor.kt
+@@ -37,6 +37,7 @@
+ import com.android.systemui.media.controls.domain.pipeline.MediaSessionBasedFilter
+ import com.android.systemui.media.controls.domain.pipeline.MediaTimeoutListener
+ import com.android.systemui.media.controls.domain.resume.MediaResumeListener
++import com.android.systemui.media.controls.shared.model.MediaData
+ import com.android.systemui.media.controls.util.MediaUiEventLogger
+ import com.android.systemui.media.remedia.data.repository.MediaPipelineRepository
+ import com.android.systemui.media.remedia.data.repository.MediaRepository
+@@ -147,6 +148,13 @@
+         mediaDataFilter.mediaDataProcessor = mediaDataProcessor
+     }
+ 
++    override fun getCurrentUserMedia(): Map<String, MediaData> {
++        val current = mediaPipelineRepository.currentUserEntries.value.keys
++        return mediaPipelineRepository.allMediaEntries.value
++            .filterValues { it.instanceId in current }
++            .mapValues { it.value.copy() }
++    }
++
+     override fun addListener(listener: MediaDataManager.Listener) {
+         mediaDataFilter.addListener(listener)
+     }
+diff --git a/packages/SystemUI/src/com/android/systemui/subscreen/OemRearMediaState.java b/packages/SystemUI/src/com/android/systemui/subscreen/OemRearMediaState.java
+new file mode 100644
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/subscreen/OemRearMediaState.java
+@@ -0,0 +1,106 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.subscreen;
++
++import android.os.Bundle;
++import java.util.HashMap;
++import java.util.Map;
++
++/** Original top-media ordering, independent of the main screen carousel's presentation order. */
++public final class OemRearMediaState {
++    private static final class Entry {
++        final Bundle data;
++        final boolean resumption;
++        final long updated;
++        final long lastActive;
++        Entry(Bundle data, boolean resumption, long updated, long lastActive) {
++            this.data = new Bundle(data);
++            this.resumption = resumption;
++            this.updated = updated;
++            this.lastActive = lastActive;
++        }
++    }
++
++    private final Map<String, Entry> mEntries = new HashMap<>();
++    private String mDismissedPackage;
++
++    public void clear() {
++        mEntries.clear();
++        mDismissedPackage = null;
++    }
++
++    public void retainKeys(java.util.Set<String> keys) {
++        mEntries.keySet().retainAll(keys);
++    }
++
++    public void update(String key, String oldKey, Bundle data, boolean resumption,
++            long updated, long lastActive) {
++        if (oldKey != null && !oldKey.equals(key)) mEntries.remove(oldKey);
++        String pkg = data.getString("packageName");
++        boolean active = data.getBoolean("active");
++        if (pkg != null && pkg.equals(mDismissedPackage) && active
++                && data.getBoolean("isPlaying")) mDismissedPackage = null;
++        if (active && !java.util.Objects.equals(pkg, mDismissedPackage)) {
++            mEntries.put(key, new Entry(data, resumption, updated, lastActive));
++        } else {
++            mEntries.remove(key);
++        }
++    }
++
++    public void remove(String key, boolean userInitiated) {
++        Entry removed = mEntries.remove(key);
++        if (userInitiated && removed != null) {
++            mDismissedPackage = removed.data.getString("packageName");
++            mEntries.values().removeIf(e -> java.util.Objects.equals(
++                    mDismissedPackage, e.data.getString("packageName")));
++        }
++    }
++
++    public Bundle top() {
++        Entry top = null;
++        for (Entry entry : mEntries.values()) {
++            if (top == null || compare(entry, top) > 0) top = entry;
++        }
++        return top == null ? null : new Bundle(top.data);
++    }
++
++    private static int compare(Entry a, Entry b) {
++        for (int location = 0; location <= 1; location++) {
++            int c = Boolean.compare(playingAt(a, location), playingAt(b, location));
++            if (c != 0) return c;
++        }
++        int c = Boolean.compare(a.data.getBoolean("active"), b.data.getBoolean("active"));
++        if (c != 0) return c;
++        c = Boolean.compare(!a.resumption, !b.resumption);
++        if (c != 0) return c;
++        c = Boolean.compare(a.data.getInt("playbackLocation") != 2,
++                b.data.getInt("playbackLocation") != 2);
++        if (c != 0) return c;
++        c = Long.compare(a.updated, b.updated);
++        if (c != 0) return c;
++        c = Long.compare(a.lastActive, b.lastActive);
++        if (c != 0) return c;
++        String ak = a.data.getString("notificationKey");
++        String bk = b.data.getString("notificationKey");
++        return ak == null ? (bk == null ? 0 : -1) : bk == null ? 1 : ak.compareTo(bk);
++    }
++
++    private static boolean playingAt(Entry entry, int location) {
++        return entry.data.getBoolean("isPlaying")
++                && entry.data.getInt("playbackLocation") == location;
++    }
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/subscreen/OemRearService.kt b/packages/SystemUI/src/com/android/systemui/subscreen/OemRearService.kt
+new file mode 100644
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/subscreen/OemRearService.kt
+@@ -0,0 +1,327 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.subscreen
++
++import android.content.BroadcastReceiver
++import android.content.ComponentName
++import android.content.Context
++import android.content.Intent
++import android.content.IntentFilter
++import android.content.ServiceConnection
++import android.content.pm.ApplicationInfo
++import android.content.pm.PackageManager
++import android.content.pm.UserInfo
++import android.os.Bundle
++import android.os.Handler
++import android.os.IBinder
++import android.os.RemoteException
++import android.os.UserHandle
++import android.service.notification.NotificationListenerService.RankingMap
++import android.service.notification.StatusBarNotification
++import android.util.Log
++import com.android.systemui.CoreStartable
++import com.android.systemui.dagger.SysUISingleton
++import com.android.systemui.dagger.qualifiers.Background
++import com.android.systemui.dagger.qualifiers.Main
++import com.android.systemui.media.controls.domain.pipeline.MediaDataManager
++import com.android.systemui.media.controls.shared.model.MediaData
++import com.android.systemui.settings.UserTracker
++import com.android.systemui.statusbar.NotificationListener
++import java.util.concurrent.Executor
++import javax.inject.Inject
++
++/** Feeds the original assistant. All connection and wire state is owned by [worker]. */
++@SysUISingleton
++class OemRearService @Inject constructor(
++    private val context: Context,
++    private val userTracker: UserTracker,
++    private val notifications: NotificationListener,
++    private val media: MediaDataManager,
++    @Main private val mainExecutor: Executor,
++    @Background private val worker: Handler,
++) : CoreStartable {
++    private data class Notice(val user: Int, val id: Int, val pkg: String, val key: String,
++        val extras: Bundle)
++
++    private var user = UserHandle.USER_NULL
++    private var profiles = emptySet<Int>()
++    private val notices = linkedMapOf<String, Notice>()
++    private val delivered = linkedMapOf<String, Notice>()
++    private val mediaState = OemRearMediaState()
++    private var connection: Connection? = null
++    private var retryDelay = 1000L
++    private val retry = Runnable { bind() }
++
++    override fun start() {
++        if (!context.resources.getBoolean(
++                com.android.internal.R.bool.config_oemRearSmartAssistantSupported)) return
++        userTracker.addCallback(userCallback, mainExecutor)
++        notifications.addNotificationHandler(notificationHandler)
++        media.addListener(mediaListener)
++        val packages = IntentFilter().apply {
++            addAction(Intent.ACTION_PACKAGE_ADDED)
++            addAction(Intent.ACTION_PACKAGE_REMOVED)
++            addAction(Intent.ACTION_PACKAGE_CHANGED)
++            addAction(Intent.ACTION_PACKAGE_REPLACED)
++            addDataScheme("package")
++        }
++        context.registerReceiverAsUser(packageReceiver, UserHandle.ALL, packages, null, worker)
++        context.registerReceiverAsUser(unlockReceiver, UserHandle.ALL,
++            IntentFilter(Intent.ACTION_USER_UNLOCKED), null, worker)
++        refreshUser()
++    }
++
++    private val userCallback = object : UserTracker.Callback {
++        override fun onBeforeUserSwitching(newUser: Int) {
++            worker.post { switchUser(UserHandle.USER_NULL, emptySet()) }
++        }
++        override fun onUserChanged(newUser: Int, userContext: Context) = refreshUser()
++        override fun onProfilesChanged(profiles: List<UserInfo>) = refreshUser()
++    }
++
++    // Capture on the main executor, after producer callbacks already queued by UserTracker.
++    private fun refreshUser() {
++        mainExecutor.execute {
++            if (userTracker.isUserSwitching) return@execute
++            val nextUser = userTracker.userId
++            val nextProfiles = userTracker.userProfiles
++                .filter { it.isEnabled && !it.isQuietModeEnabled }.map { it.id }.toSet()
++            val active = try { notifications.activeNotifications } catch (e: SecurityException) {
++                Log.w(TAG, "Notification snapshot unavailable", e)
++                null
++            }
++            val initial = active?.mapNotNull { snapshot(it) }
++            val entries = media.getCurrentUserMedia()
++            worker.post {
++                switchUser(nextUser, nextProfiles)
++                if (initial != null) {
++                    val activeKeys = active.filter { allowed(it.userId) }.map { it.key }.toSet()
++                    notices.keys.retainAll(activeKeys)
++                    initial.filter { allowed(it.user) && !it.extras.isEmpty }
++                        .forEach { notices[it.key] = it }
++                }
++                mediaState.retainKeys(entries.keys)
++                entries.forEach { (key, data) ->
++                    if (allowed(data.userId)) updateMedia(key, null, data)
++                }
++                flush()
++                bind()
++            }
++        }
++    }
++
++    private fun snapshot(sbn: StatusBarNotification): Notice? = try {
++        Notice(sbn.userId, sbn.id, sbn.packageName, sbn.key,
++            OemRearServiceProtocol.filterExtras(sbn.notification.extras).deepCopy())
++    } catch (e: RuntimeException) {
++        Log.w(TAG, "Cannot decode rear notification " + sbn.key, e)
++        null
++    }
++
++    private fun allowed(id: Int) = id == UserHandle.USER_ALL || id in profiles
++
++    private val notificationHandler = object : NotificationListener.NotificationHandler {
++        override fun onNotificationPosted(sbn: StatusBarNotification, ranking: RankingMap) {
++            val owner = userTracker.userId
++            val notice = snapshot(sbn) ?: return
++            worker.post {
++                if (user != owner || !allowed(notice.user) || notice.extras.isEmpty) return@post
++                notices[notice.key] = notice
++                send { OemRearServiceProtocol.notification(it, notice.id, notice.pkg,
++                    notice.key, notice.extras, false); delivered[notice.key] = notice }
++            }
++        }
++        override fun onNotificationRemoved(sbn: StatusBarNotification, ranking: RankingMap) =
++            onNotificationRemoved(sbn, ranking, 0)
++        override fun onNotificationRemoved(sbn: StatusBarNotification, ranking: RankingMap,
++            reason: Int) {
++            val owner = userTracker.userId
++            worker.post {
++                if (user != owner || !allowed(sbn.userId)) return@post
++                notices.remove(sbn.key)
++                send { OemRearServiceProtocol.notification(it, sbn.id, sbn.packageName,
++                    sbn.key, null, true); delivered.remove(sbn.key) }
++            }
++        }
++        override fun onNotificationRankingUpdate(ranking: RankingMap) {}
++        override fun onNotificationsInitialized() = refreshUser()
++    }
++
++    private val mediaListener = object : MediaDataManager.Listener {
++        override fun onMediaDataLoaded(key: String, oldKey: String?, data: MediaData,
++            immediately: Boolean) {
++            val owner = userTracker.userId
++            val copy = data.copy()
++            worker.post {
++                if (user != owner || !allowed(copy.userId)) return@post
++                updateMedia(key, oldKey, copy)
++                send { OemRearServiceProtocol.media(it, mediaState.top()) }
++            }
++        }
++        override fun onMediaDataRemoved(key: String, userInitiated: Boolean) {
++            val owner = userTracker.userId
++            worker.post {
++                if (user != owner) return@post
++                mediaState.remove(key, userInitiated)
++                send { OemRearServiceProtocol.media(it, mediaState.top()) }
++            }
++        }
++    }
++
++    private fun updateMedia(key: String, oldKey: String?, data: MediaData) {
++        val bundle = Bundle().apply {
++            putInt("userId", data.userId)
++            putString("app", data.app)
++            putCharSequence("artist", data.artist)
++            putCharSequence("song", data.song)
++            putString("packageName", data.packageName)
++            putBoolean("active", data.active)
++            putInt("playbackLocation", data.playbackLocation)
++            putString("notificationKey", data.notificationKey)
++            putInt("appUid", data.appUid)
++            data.isPlaying?.let { putBoolean("isPlaying", it) }
++            data.appIcon?.let { putParcelable("appIcon", it) }
++            data.artwork?.let { putParcelable("artwork", it) }
++            data.token?.let { putParcelable("token", it) }
++            data.clickIntent?.let { putParcelable("clickIntent", it) }
++        }
++        mediaState.update(key, oldKey, bundle, data.resumption,
++            System.currentTimeMillis(), data.lastActive)
++    }
++
++    private fun switchUser(next: Int, nextProfiles: Set<Int>) {
++        if (user == next && profiles == nextProfiles) return
++        // Clear data from the previous profile set before its connection is released.
++        notices.clear()
++        mediaState.clear()
++        flush()
++        disconnect()
++        delivered.clear()
++        user = next
++        profiles = nextProfiles
++        retryDelay = 1000
++    }
++
++    private fun flush() {
++        send { binder ->
++            delivered.values.toList().filter { it.key !in notices }.forEach {
++                OemRearServiceProtocol.notification(binder, it.id, it.pkg, it.key, null, true)
++                delivered.remove(it.key)
++            }
++            notices.values.forEach {
++                OemRearServiceProtocol.notification(binder, it.id, it.pkg, it.key, it.extras, false)
++                delivered[it.key] = it
++            }
++            OemRearServiceProtocol.media(binder, mediaState.top())
++        }
++    }
++
++    private fun send(action: (IBinder) -> Unit) {
++        val binder = connection?.binder ?: return
++        try {
++            action(binder)
++        } catch (e: RemoteException) {
++            Log.w(TAG, "Assistant transaction failed", e)
++            reconnect()
++        } catch (e: RuntimeException) {
++            Log.w(TAG, "Assistant payload rejected", e)
++        }
++    }
++
++    private fun bind() {
++        if (connection != null || user == UserHandle.USER_NULL) return
++        worker.removeCallbacks(retry)
++        val userContext = context.createContextAsUser(UserHandle.of(user), 0)
++        val intent = Intent(SERVICE).setComponent(ComponentName(PACKAGE, SERVICE))
++        val pm = userContext.packageManager
++        val service = pm.resolveService(intent, PackageManager.MATCH_DIRECT_BOOT_AWARE
++            or PackageManager.MATCH_DIRECT_BOOT_UNAWARE)?.serviceInfo
++        if (service == null || !service.enabled || !service.applicationInfo.enabled || !service.exported
++            || service.permission != PERMISSION
++            || service.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM == 0
++            || pm.checkSignatures(PACKAGE, "android") != PackageManager.SIGNATURE_MATCH) return
++        val next = Connection(userContext)
++        connection = next
++        try {
++            next.bound = userContext.bindService(intent, next, Context.BIND_AUTO_CREATE)
++            if (next.bound) worker.postDelayed(next.timeout, 10000) else reconnect()
++        } catch (e: SecurityException) {
++            Log.e(TAG, "Assistant binding permission denied", e)
++            disconnect()
++        }
++    }
++
++    private fun disconnect() {
++        worker.removeCallbacks(retry)
++        val old = connection ?: return
++        connection = null
++        worker.removeCallbacks(old.timeout)
++        old.binder?.unlinkToDeath(old, 0)
++        if (old.bound) old.owner.unbindService(old)
++    }
++
++    private fun reconnect() {
++        disconnect()
++        if (user == UserHandle.USER_NULL) return
++        worker.postDelayed(retry, retryDelay)
++        retryDelay = (retryDelay * 2).coerceAtMost(60000)
++    }
++
++    private inner class Connection(val owner: Context) : ServiceConnection, IBinder.DeathRecipient {
++        var bound = false
++        var binder: IBinder? = null
++        val timeout = Runnable { if (connection === this) reconnect() }
++        override fun onServiceConnected(name: ComponentName, service: IBinder) {
++            worker.post {
++                if (connection !== this) return@post
++                try {
++                    service.linkToDeath(this, 0)
++                    binder = service
++                    worker.removeCallbacks(timeout)
++                    retryDelay = 1000
++                    flush()
++                } catch (e: RemoteException) {
++                    reconnect()
++                }
++            }
++        }
++        override fun onServiceDisconnected(name: ComponentName) = binderDied()
++        override fun onBindingDied(name: ComponentName) = binderDied()
++        override fun onNullBinding(name: ComponentName) = binderDied()
++        override fun binderDied() {
++            worker.post { if (connection === this) reconnect() }
++        }
++    }
++
++    private val packageReceiver = object : BroadcastReceiver() {
++        override fun onReceive(context: Context, intent: Intent) {
++            if (intent.data?.schemeSpecificPart == PACKAGE) reconnect()
++        }
++    }
++    private val unlockReceiver = object : BroadcastReceiver() {
++        override fun onReceive(context: Context, intent: Intent) {
++            if (intent.getIntExtra(Intent.EXTRA_USER_HANDLE, UserHandle.USER_NULL) == user) bind()
++        }
++    }
++
++    companion object {
++        private const val TAG = "OemRearService"
++        private const val PACKAGE = "com.xiaomi.subscreencenter"
++        private const val SERVICE = "com.xiaomi.subscreencenter.service.SubScreenService"
++        private const val PERMISSION = "com.xiaomi.subscreencenter.SubScreenService.BIND_SERVICE"
++    }
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/subscreen/OemRearServiceModule.kt b/packages/SystemUI/src/com/android/systemui/subscreen/OemRearServiceModule.kt
+new file mode 100644
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/subscreen/OemRearServiceModule.kt
+@@ -0,0 +1,32 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.subscreen
++
++import com.android.systemui.CoreStartable
++import com.android.systemui.dagger.SysUISingleton
++import dagger.Binds
++import dagger.Module
++import dagger.multibindings.ClassKey
++import dagger.multibindings.IntoMap
++
++@Module
++interface OemRearServiceModule {
++    @Binds
++    @IntoMap
++    @ClassKey(OemRearService::class)
++    fun bindStartable(service: OemRearService): CoreStartable
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/subscreen/OemRearServiceProtocol.java b/packages/SystemUI/src/com/android/systemui/subscreen/OemRearServiceProtocol.java
+new file mode 100644
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/subscreen/OemRearServiceProtocol.java
+@@ -0,0 +1,82 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.subscreen;
++
++import android.os.Bundle;
++import android.os.IBinder;
++import android.os.Parcel;
++import android.os.Parcelable;
++import android.os.RemoteException;
++
++/** Wire boundary of the original APK. The assistant owns card parsing and actions. */
++public final class OemRearServiceProtocol {
++    public static final String DESCRIPTOR = "com.xiaomi.subscreencenter.service.ISubScreen";
++
++    private OemRearServiceProtocol() {}
++
++    public static Bundle filterExtras(Bundle source) {
++        Bundle result = new Bundle();
++        for (String key : source.keySet()) {
++            if (!key.startsWith("miui.")) continue;
++            Object value = source.get(key);
++            if (value == null || value instanceof String) result.putString(key, (String) value);
++            else if (value instanceof Bundle) result.putBundle(key, new Bundle((Bundle) value));
++            else if (value instanceof Parcelable) result.putParcelable(key, (Parcelable) value);
++            else if (value instanceof CharSequence) {
++                result.putCharSequence(key, (CharSequence) value);
++            } else if (value instanceof Integer) result.putInt(key, (Integer) value);
++            else if (value instanceof Long) result.putLong(key, (Long) value);
++            else if (value instanceof Boolean) result.putBoolean(key, (Boolean) value);
++            else if (value instanceof Float) result.putFloat(key, (Float) value);
++            else if (value instanceof Double) result.putDouble(key, (Double) value);
++            else result.putString(key, value.toString());
++        }
++        return result;
++    }
++
++    public static void notification(IBinder service, int id, String pkg, String key,
++            Bundle extras, boolean removed) throws RemoteException {
++        Parcel data = Parcel.obtain();
++        try {
++            data.writeInterfaceToken(DESCRIPTOR);
++            data.writeInt(id);
++            data.writeString(pkg);
++            data.writeString(key);
++            if (!removed) data.writeTypedObject(extras, 0);
++            send(service, removed ? 4 : 3, data);
++        } finally {
++            data.recycle();
++        }
++    }
++
++    public static void media(IBinder service, Bundle media) throws RemoteException {
++        Parcel data = Parcel.obtain();
++        try {
++            data.writeInterfaceToken(DESCRIPTOR);
++            data.writeTypedObject(media, 0);
++            send(service, 6, data);
++        } finally {
++            data.recycle();
++        }
++    }
++
++    private static void send(IBinder service, int code, Parcel data) throws RemoteException {
++        if (!service.transact(code, data, null, IBinder.FLAG_ONEWAY)) {
++            throw new RemoteException("ISubScreen rejected transaction " + code);
++        }
++    }
++}

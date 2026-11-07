@@ -1,0 +1,5 @@
+# Fixed PixelOS ROM production patch order.
+external/selinux a8c5e74f85f869bf236a01ba24181b78f5e39a52 selabel-lookup-host.patch
+external/erofs-utils abbde14092ad3abd8908b864fa9b04685820577b host-tools.patch
+build/soong 321ecf4fc740482603b917c5de30a0e27e97595e vendor-build-prop-provider.soong.patch
+build/soong 321ecf4fc740482603b917c5de30a0e27e97595e dlkm-build-prop-provider.soong.patch

@@ -1,0 +1,6 @@
+id=popsicle-refresh-idle
+name=Popsicle PixelOS Idle Refresh Debug
+version=0.1
+versionCode=1
+author=popsicle bring-up
+description=Enable the main display SurfaceFlinger idle timer at 1000 ms. Reboot required. Keeps user refresh limits; does not enable panel ARR. Disable and reboot to revert.

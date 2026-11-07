@@ -1,0 +1,10 @@
+--- a/Android.bp
++++ b/Android.bp
+@@ -272,6 +272,7 @@
+     main: "popsicle/derive_vendor.py",
+     srcs: [
+         "popsicle/derive_vendor.py",
++        "popsicle/audio_repair.py",
+         "popsicle/stage_inputs.py",
+         "popsicle/vendor_avb.py",
+         "popsicle/vendor_target_files.py",

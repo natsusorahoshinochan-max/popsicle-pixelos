@@ -1,0 +1,10 @@
+--- a/src/com/android/settings/appfunctions/AbstractDeviceStateAppFunctionService.kt
++++ b/src/com/android/settings/appfunctions/AbstractDeviceStateAppFunctionService.kt
+@@ -178,6 +178,7 @@
+                         "the device is locked.",
+                 )
+             )
++            return
+         }
+ 
+         backgroundScope.launch(NonCancellable) {

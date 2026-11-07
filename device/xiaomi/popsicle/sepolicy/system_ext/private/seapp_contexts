@@ -1,0 +1,4 @@
+user=system seinfo=platform isPrivApp=true name=org.lineageos.popsicle.imsaudio domain=popsicle_ims_audio type=system_app_data_file levelFrom=all
+# Original SDK 36 camera keeps the privileged-app/Qigsaw data contract, with
+# OEM service and DSP access confined to its own platform-signed package.
+user=_app seinfo=platform isPrivApp=true name=com.android.camera domain=popsicle_camera_app type=privapp_data_file levelFrom=user

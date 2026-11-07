@@ -1,0 +1,6 @@
+id=popsicle_fingerprint_icon
+name=Popsicle PixelOS Fingerprint Icon
+version=v0.1
+versionCode=1
+author=Kanoe
+description=Correct the physical pixel pitch used by the PixelOS lockscreen fingerprint icon. Reboot required.

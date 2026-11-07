@@ -1,0 +1,25 @@
+diff --git a/java/aar.go b/java/aar.go
+--- a/java/aar.go
++++ b/java/aar.go
+@@ -65,6 +65,9 @@
+ type aaptProperties struct {
+ 	// flags passed to aapt when creating the apk
+ 	Aaptflags []string
++
++	// Optional resource name-to-ID mapping passed to aapt2 --stable-ids.
++	Stable_resource_ids *string `android:"path"`
+ 
+ 	// include all resource configurations, not just the product-configured
+ 	// ones.
+@@ -278,6 +281,11 @@
+ 
+ 	// Flags specified in Android.bp
+ 	linkFlags = append(linkFlags, a.aaptProperties.Aaptflags...)
++	if a.aaptProperties.Stable_resource_ids != nil {
++		ids := android.PathForModuleSrc(ctx, *a.aaptProperties.Stable_resource_ids)
++		linkFlags = append(linkFlags, "--stable-ids", ids.String())
++		linkDeps = append(linkDeps, ids)
++	}
+ 
+ 	linkFlags = append(linkFlags, "--enable-compact-entries")
+ 	if ctx.Config().ReleaseUseSparseEncoding() {
