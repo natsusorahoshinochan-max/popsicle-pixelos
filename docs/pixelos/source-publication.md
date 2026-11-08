@@ -122,7 +122,7 @@ LOFIC、原始采集、逆向资料和 Git 历史。
 helper 内容一致。139 个设备树文件与 32 份安装 helper 核对通过，设备副本仅刷新
 三份 README。
 
-目录通过同卷移动完成切换，原路径保留相对兼容链接。
+迁移时，目录通过同卷移动完成切换，原路径建立相对兼容链接。
 
 | 原位置 | 新开发根下的位置 |
 |---|---|
@@ -134,10 +134,9 @@ helper 内容一致。139 个设备树文件与 32 份安装 helper 核对通过
 
 完整构建任务的脚本、失败与成功日志、状态记录均随目录保存。11 月 6 日与
 11 月 8 日成品继续按各自版本归档，来源 JSON 保留生成时的绝对路径。
-历史 OUT 的 host 仍指向 `/tmp/pixelos-build-output-20261108/host`，旧 assembly
-仍使用 `/tmp/pixelos-publication-assembly-20261108`。
-历史 OUT 中的失效缓存链接随原目录保存，target-files 与 release 中的 ZIP 保持
-同一 inode，硬链接数为 `2`。
+迁移验收时，历史 OUT 的 host 指向 `/tmp/pixelos-build-output-20261108/host`，
+失效缓存链接随原目录保存，target-files 与 release 中的 ZIP 为同一 inode，
+硬链接数为 `2`。旧 assembly 使用 `/tmp/pixelos-publication-assembly-20261108`。
 
 R8 下载、AICore 六份原件和三平台工具已迁入新根的 `inputs/` 与 `tools/`。
 33 个输入与工具文件的 inode、属性与内容核对通过。
@@ -175,9 +174,35 @@ lunch 日志记录宿主 nsjail 不可用及屏幕宽度采用默认值的提示
 迁移清单、对象库日志和验收结果保存在 `archive/validation-20261108/migration/`，
 目录移动总账位于 `archive/directory-migration.json`。
 
-本次复核时数据卷可用约 24.1 GiB。三个旧 OUT 的可回收空间约 235.3 GiB，
-清理后预计可用约 259.4 GiB。新 OUT 的完整重建、导出与打包复验在满足
-250 GiB 可用空间预算后执行。
+迁移验收后复核时，数据卷可用约 24.1 GiB。新 OUT 的完整重建、导出与打包
+复验按 250 GiB 可用空间编制预算。
+
+### 2026-11-08 首批旧 OUT 清理
+
+- `/root/autodl-tmp/pixelos-17/out-pixelos-user`
+- `/root/autodl-tmp/pixelos-17/out-source-publication`
+- `/root/autodl-tmp/popsicle-rom-dev/archive/validation-20261108/out-pixelos-user`
+
+三个目录已删除，清理脚本复核通过，退出码为 `0`。删除前归档了 149 个构建
+证据文件，共 912,363,488 字节（0.850 GiB），摘要与属性复验通过。清理状态、
+日志及证据保存在 `archive/validation-20261108/cleanup/20261108-old-outs/`。
+
+原 Android 树的 `out-pixelos-user` 兼容链接已退役，原链接文本和属性保存在
+清理档案的 `retired-alias.json` 与 `retired-out-alias`。
+
+清理后的独立复核通过。两期 target-files 和交付归档共四份成品的全文件 SHA256
+均与既有值一致。11 月 8 日 target-files ZIP 的 inode 与内容核对通过，硬链接数
+从 `2` 降为 `1`。
+
+139 个设备树文件、32 份 helper、12 份来源记录、工具环境和 export-host 校验通过。
+新 OUT 的 737 项与基线一致。1,172 条 alternates、6,006 条 Git 元数据链接、归档对象清单
+及两树各 11,101 项 Git 元数据内容摘要复核通过。独立基线、清理后清单、比较结果和
+成品摘要保存在清理档案的 `independent-audit/`。generated、展开交付、A16 raw、
+历史 `/tmp` 目录及源码继续保留。
+
+数据卷可用空间从 24.06 GiB 增至 258.53 GiB，净增 234.48 GiB，已计入证据归档
+占用，使用率从 98% 降至 74%。当前容量达到 250 GiB 的完整重建预算，新 OUT 的
+完整构建、导出与打包复验待执行。
 
 ## 维护入口
 
