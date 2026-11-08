@@ -7,11 +7,12 @@
 范围、固定来源和验证结果集中记录于
 [源码发布说明](source-publication.md)。新树准备使用裁剪后的生产补丁序列。
 
-日常维护已切换到服务器 `/root/autodl-tmp/popsicle-rom-dev/`，源码副本、Git 对象
+日常维护已切换到服务器 `/root/autodl-tmp/pixelos-popsicle/`，源码副本、Git 对象
 与输入环境检查通过，新 OUT 的 lunch 入口验收完成。
 
 首批三个旧 OUT 已清理，清理后数据卷可用 258.53 GiB，达到完整重建预算。新 OUT 的
-完整构建、导出与打包复验待执行。
+完整构建、导出与打包复验待执行。PixelOS、LineageOS 与 17ultra-lofic 的
+独立工作区拆分正在进行。
 
 ## 已有成品
 

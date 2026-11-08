@@ -204,6 +204,13 @@ lunch 日志记录宿主 nsjail 不可用及屏幕宽度采用默认值的提示
 占用，使用率从 98% 降至 74%。当前容量达到 250 GiB 的完整重建预算，新 OUT 的
 完整构建、导出与打包复验待执行。
 
+### 2026-11-08 三项目分离
+
+PixelOS 开发根已同卷迁入 `/root/autodl-tmp/pixelos-popsicle/`，Android、维护仓库和
+Git 对象目录的 inode 保持，活动 source-config、环境路径与 repo.reference 已更新。
+LineageOS 和 17ultra-lofic 分别按独立工程整理。项目内固件快照、输入身份及工具环境
+正在迁移，完整构建和独立交付验收待记录。
+
 ## 维护入口
 
 准备命令见[源码准备](../../scripts/build-support/source-release.md)，安装起点与分区行为见

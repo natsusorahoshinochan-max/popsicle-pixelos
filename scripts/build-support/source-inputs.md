@@ -24,6 +24,11 @@
 
 表中输入由 `prepare-source-inputs.py` 准备。AICore单独准备到 `aicore/`，输入为本机Google Play交付的完整APK集合，见[AICore准备](../../device/xiaomi/popsicle/aicore/README.md)。TurboAdapter原始APK、dex2jar与R8输入另按[Turbo/R8契约](../source-patches/turbo-r8/README.md)准备。
 
+OEM ABI 的新 `SOURCE.json` 使用版本化记录，保存固件版本、分区相对路径、原始 ELF 与
+NOTICE 摘要，以及准备器和 Blueprint 身份。记录可随本项目输入目录移动。旧绝对路径
+记录在 ELF、NOTICE 和映射全部一致时继续复用，旧记录的格式迁移先归档原件，再生成和
+核对新记录，原始 ELF 与 NOTICE 保持。
+
 背屏适配 APK 的复用记录包含原件、转换源码、工具和输出摘要。相同输入可在其他路径继续使用，源码或输入变化时重新生成；旧格式记录先与当前生成结果比对，来源冲突时需要在新的私有目录准备。
 
 准备程序拒绝不匹配的产品版本、缺失输入、重定向的私有输出路径及内容不同的既有固件/模板。OEM库保留ELF/NOTICE检查，QCC保留精确rc和ELF检查，IMS保留指令及纯资源APK检查。内容一致的既有结果可复用。后续组件失败时，此前成功的输入可能已写入；修正具体错误后重试，保留原始固件。构建中的镜像元数据、策略、签名和target-files检查继续执行。

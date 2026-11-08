@@ -30,7 +30,7 @@ recovery、update_engine 和原厂 64 位、4 KiB ABI。
 指向当前维护副本。设备源码和 helper 对应同一发布提交。
 
 本机 ROM 维护使用独立的 `popsicle-pixelos-rom` 工作区。服务器开发根为
-`/root/autodl-tmp/popsicle-rom-dev/`。
+`/root/autodl-tmp/pixelos-popsicle/`。
 
 | 根目录下的路径 | 用途 |
 |---|---|
@@ -48,7 +48,7 @@ recovery、update_engine 和原厂 64 位、4 KiB ABI。
 Android 树内的真实 vendor 目录。
 
 宿主使用 `env/build-support-venv/`，Python 为 3.12.3，protobuf 固定为 5.29.5。
-通过 `source /root/autodl-tmp/popsicle-rom-dev/env/build.env` 载入环境。
+通过 `source /root/autodl-tmp/pixelos-popsicle/env/build.env` 载入环境。
 `POPSICLE_OUT` 保存输出绝对路径，`OUT_DIR` 使用相对 Android 根的
 `../out/custom_popsicle-user`，与正式构建包装器的路径一致。
 构建中间文件与 Soong 临时文件放在同一文件系统。

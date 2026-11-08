@@ -5,6 +5,7 @@
 import argparse
 import gzip
 import html
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -18,6 +19,12 @@ def main():
     args = parser.parse_args()
     source_root = args.official_filesystems.resolve(strict=True)
     destination = args.private_root.resolve()
+    firmware_version = "OS4.0.0.23.XPBCNXM"
+    versions = [line.split("=", 1)[1].strip()
+                for line in (source_root / "product/etc/build.prop").read_text().splitlines()
+                if line.startswith("ro.product.build.version.incremental=")]
+    if versions != [firmware_version]:
+        parser.error("expected the " + firmware_version + " official filesystem cohort")
     required_suffix = ("vendor", "xiaomi", "popsicle-private", "prebuilt", "oem-abi")
     if destination.parts[-len(required_suffix):] != required_suffix:
         parser.error("private-root must end in vendor/xiaomi/popsicle-private/prebuilt/oem-abi")
@@ -49,17 +56,49 @@ def main():
                     + binding.get("lib", "") + " [" + content_id + "]\n\n"
                     + html.unescape(contents[content_id]))
 
-    outputs = {
-        destination / "libcrypto/NOTICE": ("\n\n".join(text) + "\n").encode(),
-        destination / "libcrypto/SOURCE.json": (json.dumps({
-            "official_library": str(library),
-            "official_notice": str(notices),
-            "notice_bindings": bindings,
-            "notice_content_ids": "Identifiers supplied by Xiaomi's NOTICE, not generated checksums.",
-        }, indent=2) + "\n").encode(),
-    }
     target = destination / "libcrypto/arm64/libcrypto.so"
-    outputs[target] = library.read_bytes()
+    notice_target = destination / "libcrypto/NOTICE"
+    source_target = destination / "libcrypto/SOURCE.json"
+    library_bytes = library.read_bytes()
+    notice_bytes = ("\n\n".join(text) + "\n").encode()
+    record = {
+        "schema_version": 2,
+        "firmware_version": firmware_version,
+        "official_library": "vendor/lib64/libcrypto.so",
+        "official_notice": "vendor/etc/NOTICE.xml.gz",
+        "sha256": {
+            "official_library": hashlib.sha256(library_bytes).hexdigest(),
+            "official_notice": hashlib.sha256(notices.read_bytes()).hexdigest(),
+        },
+        "preparer": {
+            "version": 2,
+            "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "template_sha256": hashlib.sha256(Path(__file__).with_name("Android.bp").read_bytes()).hexdigest(),
+        },
+        "notice_bindings": bindings,
+        "notice_content_ids": "Identifiers supplied by Xiaomi's NOTICE, not generated checksums.",
+    }
+    source_bytes = (json.dumps(record, indent=2) + "\n").encode()
+    if source_target.is_file() and not source_target.is_symlink():
+        existing_bytes = source_target.read_bytes()
+        existing = json.loads(existing_bytes)
+        if isinstance(existing, dict) and "schema_version" not in existing:
+            legacy_library = Path(existing.get("official_library", ""))
+            legacy_notice = Path(existing.get("official_notice", ""))
+            legacy = {key: record[key] for key in ("notice_bindings", "notice_content_ids")}
+            legacy.update(official_library=str(legacy_library), official_notice=str(legacy_notice))
+            if (existing != legacy or not legacy_library.is_absolute() or not legacy_notice.is_absolute()
+                    or legacy_library.parts[-3:] != ("vendor", "lib64", "libcrypto.so")
+                    or legacy_notice.parts[-3:] != ("vendor", "etc", "NOTICE.xml.gz")
+                    or legacy_library.parents[2] != legacy_notice.parents[2]):
+                parser.error("unrecognized legacy source record: " + str(source_target))
+            if (not target.is_file() or target.is_symlink() or target.read_bytes() != library_bytes
+                    or not notice_target.is_file() or notice_target.is_symlink()
+                    or notice_target.read_bytes() != notice_bytes):
+                parser.error("legacy source record requires matching private ELF and NOTICE")
+            # Retain verified legacy provenance until an explicit metadata migration.
+            source_bytes = existing_bytes
+    outputs = {notice_target: notice_bytes, source_target: source_bytes, target: library_bytes}
     pending = {}
     for path, data in outputs.items():
         if path.is_symlink() or not path.resolve().is_relative_to(destination):
