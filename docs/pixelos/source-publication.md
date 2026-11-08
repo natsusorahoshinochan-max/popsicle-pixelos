@@ -68,9 +68,48 @@ AICore 使用固定树自带 SDK 工具、JDK 和宿主 `protoc` 完成准备，
 已由本仓库提取入口完成。原始镜像保留 Android 元数据，解包目录用于读取原件内容。
 
 Python、Shell 和补丁语法检查、本地文档链接检查及迁移差异审查已完成。
-完整新树 ROM 构建、镜像导出和三平台打包仍待验证。验证开始时构建宿主的可用存储
-约 115 GiB，既有 ROM 输出约 161 GiB，本次独立目录验证覆盖源码装配与输入
-准备。已有成品验收仅对应原成品版本。
+
+### 2026-11-08 完整构建与交付验证
+
+本次验证使用发布提交 `be5dfefbae692f635c31b3c8773797db0799a6ec` 与固定清单的
+1,222 个项目。139 份设备源码及 32 份安装 helper 均与该发布副本逐字节一致。
+源码树及输出目录独立保存，编译进程使用独立 UID 65534。
+
+首轮产物的静态内容审查发现 60 个 APK/APEX 携带宿主路径符号链接，该轮产物已废弃。
+复用输入调整为 4,706 份只读硬链接和 144 份独立普通文件，共 4,850 份文件逐一核对
+SHA256，原件内容、权限、UID/GID 和修改时间核对通过。
+
+清空 `OUT_DIR` 后，于 2026-11-08 12:49:58 开始全新完整构建，
+`m -j16 -k20 target-files-package lpmake simg2img img2simg` 一次完整执行通过，
+退出码为 `0`。构建于 19:15:20 完成，耗时 6 小时 25 分 22 秒，时间均为 Asia/Taipei。
+生产构建的 ABI、VINTF、SELinux、NOTICE 和签名检查通过。vendor / ODM 校验覆盖
+派生文件系统元数据、硬链接组、完整文件字节及 FEC 独立重编码比较。
+
+target-files 全成员 CRC 和内容审查通过。生产安装包共 286 份普通文件，包括
+242 个 APK、17 个 APEX 和 27 个 CAPEX，载荷合计 3,616,211,337 字节。
+867 条设备内有效符号链接通过检查，宿主路径链接数为 `0`。
+此前受影响的 60 个包均为普通文件，大小及 CRC 与历史成品对应项一致。
+全部 286 个共同安装包的大小核对一致，其中 281 个 CRC 相同，5 个 CRC 随本次构建变化。
+生产模块清单与原维护树的构建输出核对一致，SHA256 为
+`1ecc21e7f0cdc812d5a91736fbbc2d000c5aeef1993f7b7e96e9ad9fa435b8e4`。
+
+保存 target-files 和本次宿主工具的独立动态库闭包并完成校验后，清理本次构建的
+Soong 中间产物以供导出使用。导出结果为 `complete=true`、`image_count=50`，
+安装 super 的 `full_device_write_bytes` 为 `13421772800`。
+交付包包含 Windows、macOS、Linux 安装入口，包内 SHA256、归档摘要和完整归档
+读取检查通过，于 2026-11-08 19:27:21 完成（Asia/Taipei）。
+
+本次验证目录为 `/root/autodl-tmp/pixelos-publication-build-20261108/`，
+产物保存于 `artifacts/`。构建、交付日志与静态内容审查结果分别保存于
+`logs/build-success.log`、`logs/finish.log` 和 `logs/central-directory-content-audit.json`。
+
+- `release/target_files.zip` 为 13,276,126,295 字节，SHA256 为
+  `912dcef97e37c96f263d8db28f88362cc601569f7398f5ecba775c8a83586b9b`。
+- `delivery/PixelOS-popsicle-20261108-source-validation_by_Kanoe.tar.gz` 为
+  6,896,506,929 字节，SHA256 为
+  `ca50dab07f68aab50ea54366f615887f0a5866938a2ca26f47ac74c44d5cbd2b`。
+
+本次成品的设备验收状态为 `pending-user-test-from-A16`，真机运行验收待完成。
 
 ## 维护入口
 
