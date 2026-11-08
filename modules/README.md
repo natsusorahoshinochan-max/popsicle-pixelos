@@ -15,6 +15,6 @@
 | 已撤回的颜色覆盖 | `popsicle-color-modes`，保留撤回状态 |
 | 旧刷新率参数实验 | `popsicle-refresh-idle`，独立于正式 ARR 修复 |
 
-子目录中的旧补丁序号对应来源提交的历史序列。正式源码选择以当前生产序列为准。历史构建命令要求匹配的 Android 树、私有输入、签名和构建产物，宿主目录由调用者提供。源码准备及当前工具环境见[构建说明](../scripts/build-support/source-release.md)。
+历史版本记录中的补丁序号沿用来源提交的原 128 条维护序列。当前实现通过各模块链接的补丁路径定位，装配顺序由生产序列确定。历史构建命令要求匹配的 Android 树、私有输入、签名和构建产物，宿主目录由调用者提供。源码准备及当前工具环境见[构建说明](../scripts/build-support/source-release.md)。
 
 源码发布范围和固定来源见[发布说明](../docs/pixelos/source-publication.md)。

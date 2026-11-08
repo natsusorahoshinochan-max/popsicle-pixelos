@@ -18,13 +18,9 @@ or repeated interface lines fail before output creation. An existing bundle is
 accepted only when it contains the same files and bytes; changed output is not
 overwritten.
 
-The product already selects `popsicle_qccsyshal_aidl_service`. Preparation
-installs the complete private bundle before the build. Source preparation does
-not establish runtime acceptance; current project status is maintained in
-[PixelOS progress](../../../../docs/pixelos/progress.md).
-The existing device framework manifest provides the AIDL declaration. It must
-remain paired with the actual installed service; the template does not add a
-duplicate manifest fragment.
+The product selects `popsicle_qccsyshal_aidl_service`, and preparation installs
+the complete private bundle before the build. The existing device framework
+manifest provides the AIDL declaration and stays paired with the installed service.
 
 | Module | Installed path below `system_ext` |
 | --- | --- |
@@ -45,24 +41,18 @@ symbols disallowed. The device's preserved kernel supports only 4 KiB pages;
 
 The fixed Qualcomm policy already supplies the service domain, executable,
 Binder service, socket and data labels. The system linker namespace includes
-`system_ext`; the vendor client crosses Binder rather than loading these private
-system libraries. No new namespace exposure or permissive SELinux rule is added.
+`system_ext`, and the vendor client communicates with the service through Binder.
+Integration keeps the existing namespace configuration and strict SELinux policy.
 
-Preparation validates the complete ELF bytes and the exact single-line rc
-change, rejecting missing/repeated interfaces and foreign output. Native
-contract checks use `check_elf_file.py`, the modules' direct providers and
-`host_init_verifier`; the 4 KiB positive and 16 KiB negative controls have
-separate scope from product integration. Product integration concerns the
-actual installed modules, rc, manifest, selected ELF providers (including bionic
-APEX) and strict combined policy. These results do not establish runtime mode
-selection, service registration, vendor client calls, ownership/labels or
-death/restart and reboot behavior.
+Native contract checks use `check_elf_file.py`, the modules' direct providers and
+`host_init_verifier`, with 4 KiB positive and 16 KiB negative controls. Product
+integration covers the installed modules, rc, manifest, selected ELF providers
+(including bionic APEX) and strict combined policy.
 
-This package installs the native HAL service and its three shared libraries.
-QCC application
-signing/permissions, its JNI and file-agent socket endpoint, the conditional
-Mink dependency, and Sigma/WFD are separate from this native provider contract.
-A registered HAL does
-not establish file-delivery or complete QCC acceptance. Existing native-download
-and `hwservicemanager.ready` stop conditions must be observed as mode decisions,
-not removed to force the service to stay running.
+Runtime confirmation is pending for mode selection, service registration, vendor
+client calls, ownership and labels, death/restart, and reboot behavior. Preserve
+the native-download and `hwservicemanager.ready` stop conditions when checking
+mode decisions. End-to-end QCC acceptance also covers application
+signing/permissions, its JNI and file-agent socket endpoint, the conditional Mink
+dependency, Sigma/WFD, and file delivery. Current project status is maintained in
+[PixelOS progress](../../../../docs/pixelos/progress.md).

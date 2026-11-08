@@ -20,8 +20,7 @@ modify active Android source or production device-tree resources. The published
 v0.1 ZIP remains unchanged as historical evidence.
 
 On the matching old baseline, installation through KernelSU takes effect after a
-manual reboot; disabling or uninstalling and rebooting restores that baseline.
-There are no persistent settings, boot scripts or SELinux policy changes.
-Chrome's landscape cutout-side black area is expected and preserved. Full-ROM
-acceptance does not establish separate passing results for every font/display
-scale, rotation direction, lockscreen or expanded-shade layout.
+manual reboot. Disabling or uninstalling and rebooting restores that baseline.
+Chrome's landscape cutout-side black area is expected and preserved. Individual
+font/display scales, rotation directions, lockscreen and expanded-shade layouts
+await separate checks.

@@ -35,22 +35,19 @@ WebView provider configuration, so the old device WebView RRO is not installed.
 The public AVB key named `popsicle-userdebug.avbpubkey` remains a required input;
 the filename does not select a userdebug product. Keep the Bootloader unlocked.
 
-Current build, delivery and user acceptance are maintained in
-[progress](../../../docs/pixelos/progress.md). Product graph and scoped module
-results only cover their recorded targets and do not establish additional hardware
-acceptance.
+Build and delivery results and device acceptance records are maintained in
+[progress](../../../docs/pixelos/progress.md).
 Installation and recovery requirements are in the
 [PixelOS installation contract](../../../docs/pixelos/fastboot-install.md).
 
 ## Source ownership and license
 
 Original project source is Apache-2.0; see [LICENSE](LICENSE). Retain existing
-upstream notices for their respective material. OEM extracts are identified by
-file comments and evidence, not represented as newly authored implementations.
+upstream notices for their respective material. File comments and evidence
+record the provenance of OEM extracts.
 Maintain the generated AIDL API through the normal update-api target.
 APK, ELF, partition images and signing secrets do not belong in this device Git
 repository. The AVB public key is an intentional source input.
 
-Legacy HAL/effects probes are independently retained in the companion
-`scripts/device-debug/`; they are not installed product packages or PixelOS
-runtime acceptance. Reuse source only after verifying its actual PixelOS consumer.
+Legacy HAL/effects probes are retained in the companion `scripts/device-debug/`.
+Verify each probe's actual PixelOS consumer before source reuse.

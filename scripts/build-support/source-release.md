@@ -154,4 +154,4 @@ python3 "$POPSICLE_PROJECT/scripts/build-support/package-fastboot-release.py" \
 
 导出器的默认 `device_acceptance=pending-user-test-from-A16` 和 READY 文本描述生成时状态。当前设备验收由实际发布记录维护。`target_files_firmware_included=false` 表示包内官方固件单独来自原始 A17 payload。
 
-安装行为、起点和分区保护条件见[安装说明](../../docs/pixelos/fastboot-install.md)。源码准备、构建和打包各自的执行范围按当前任务确定，手机操作使用单独明确的授权。
+安装行为、起点和分区保护条件见[安装说明](../../docs/pixelos/fastboot-install.md)。

@@ -1,88 +1,94 @@
 # Product IMS and call audio
 
-`prepare.py ANDROID_TREE PROJECT OFFICIAL_A17_FILESYSTEMS` prepares the validated
+`prepare.py ANDROID_TREE PROJECT OFFICIAL_A17_FILESYSTEMS` prepares the
 non-MIUI IMS APK specialization, its ARM64 JNI libraries under system_ext/lib64, declared DEX
 libraries, scoped privileged permissions and the official
-Telephony selection overlay under the existing private vendor tree. The normal
-product build signs IMS with its actual platform key. The original official
+Telephony selection overlay under the private vendor tree. The normal
+product build signs IMS with its platform key. The original official
 files remain read-only. Official system_ext/product NOTICE texts accompany the
 private inputs through normal build metadata. The existing source registration XMLs
 are semantically identical to the official inputs and are reused as the sole
-install owners; the two tested official DEX libraries are selected as preferred
-prebuilts, without removing their source providers. The formal PixelOS sequence
-includes the pinned `scripts/source-patches/ims-dex-libraries/series` change to
-export their real uses-library build/install context; a bare dex_import lacks
-that contract. The active tree already contains it and must not be replayed.
-The OEM manifest requests native-library extraction. System preloads therefore
-retain the tested global lib64 installation through two normal ELF-checked
-prebuilt modules, rather than depending on APK installation-time extraction.
+install owners. The two official DEX libraries are selected as preferred
+prebuilts alongside their registered source providers.
 
-The product installs the tested audio parameter adapter under system_ext with the
+For a new Android tree, follow the formal PixelOS source preparation sequence,
+which includes the pinned `scripts/source-patches/ims-dex-libraries/series` change.
+It exports the preferred prebuilts' uses-library build and install context.
+An already assembled tree is maintained through the specific incremental changes
+it needs. The full sequence is described in
+[source preparation](../../../../scripts/build-support/source-release.md).
+
+Preparation uses the supplied Android and official filesystem paths. It assembles
+the complete private bundle in a temporary directory before publication. An
+identical existing bundle is verified and reused, and a different bundle is
+rejected. The OEM manifest requests native-library extraction. For the system
+preload, two prebuilt modules install the JNI libraries under system_ext/lib64
+and receive normal ELF checks during the product build.
+
+The product installs the audio parameter adapter under system_ext with the
 existing Qualcomm system_ext Binder service label. `ro.audio.ihaladaptervendorextension_enabled=true`
-selects the framework's existing waitForService and reconnect path; init starts
-the adapter in class core. It is not a module resetprop or a simulated ready flag.
+selects the framework's existing waitForService and reconnect path. Init starts
+the adapter in class core. Successful Binder registration writes `Registered`
+to the `PopsicleAudioAdapter` log.
 
 The source-built, UI-free persistent system application requests official
 AudioControllerAgent initialization at locked boot completion, before first
-unlock. Both boot broadcasts share a synchronized, system-user-only entry point.
-The Application retains its boot-completed property guard; ActivityManager owns
-process restart and the Application requests initialization again after boot.
-One process-owned HandlerThread supplies the controller Looper, preserving the
-OEM working-thread contract while its real HAL initialization can wait for
-services. A request does not imply that asynchronous initialization has finished.
-Secondary users do not start another controller. The OEM QtiTelephony APK is a read-only classpath input,
-installed as `popsicle-qti-audio-controller.jar`, never as a QtiTelephony package.
-A PathClassLoader loads that archive and the tested qti utility jar with the
-application's normal classloader as parent. The IMS provider's separate declared
-uses-library contract and dexpreopt checks remain intact.
+unlock. Both boot broadcasts share a synchronized entry point that returns
+immediately for secondary users and for a controller already created in the
+current process. ActivityManager restarts the persistent process after process
+death. The Application checks `sys.boot_completed` and requests initialization
+again after boot. One process-owned HandlerThread supplies the controller Looper
+for asynchronous HAL initialization and service waits. The application logs
+`Official audio controller initialization requested` after `init(Looper)` returns.
+
+The OEM QtiTelephony APK is a read-only classpath input installed as
+`popsicle-qti-audio-controller.jar`. A PathClassLoader loads that archive and the
+qti utility jar with the application's normal classloader as parent. The IMS
+provider declares its own uses-library dependencies, which are checked during
+dexpreopt.
 
 The bridge uses system UID, a dedicated seapp-selected SELinux domain and the
-telephony HAL client contract for the actual IQcRilAudio slots. It is created by
-zygote, so ART cache execution follows the existing application policy; no init
-application-domain transition or executable-data neverallow exception is added.
+telephony HAL client contract for the IQcRilAudio slots. Zygote creates the
+process through the normal application transition, and ART cache execution
+follows the existing application policy.
 The controller obtains UserManager before selecting the system user, so its
-domain explicitly permits that service lookup. Its existing MODIFY_PHONE_STATE
-permission satisfies audio-server state monitoring without another routing grant.
+domain explicitly permits that service lookup. Its MODIFY_PHONE_STATE
+permission covers audio-server state monitoring.
 AudioManager.setParameters also resolves native media.audio_flinger through
-AudioSystem; this requires audioserver_service lookup in addition to the Java
-audio_service lookup. Binder permissions and real callbacks remain responsible for call state. No
-fixed VSID is used.
+AudioSystem, which requires audioserver_service lookup in addition to the Java
+audio_service lookup. Binder permissions govern access, and the OEM controller's
+callbacks handle call state and VSID selection.
 
-The adapter accepts the framework's `true` Bluetooth offload-reconfiguration
-notification without adding vendor parameters. The framework then calls the
-real Bluetooth HAL and retains its result handling. Other notification values
-are rejected as illegal arguments; the bridge does not implement or simulate
-the underlying A2DP or LE operation.
+For the framework's `true` Bluetooth offload-reconfiguration notification, the
+adapter returns an empty vendor-parameter list. The framework then invokes the
+Bluetooth HAL's A2DP or LE operation and handles its result. Other notification
+values receive `EX_ILLEGAL_ARGUMENT`.
 
-The device RRO retains VoLTE capability. Carrier policy is now generated by
+The device RRO provides VoLTE capability. Carrier policy is generated by
 `../carrier-config/prepare.py` from matching stock global data, replacing the
-former China Unicom-only source RRO. The integrated CarrierConfig patch
-handles source-specific SIM prefixes and conditional global capability policy;
+earlier China Unicom-only source RRO. The integrated CarrierConfig patches handle
+source-specific SIM prefixes and conditional global capability policy.
 `../carrier-apns/prepare.py` merges compatible stock APNs with the PixelOS baseline.
-See `scripts/source-patches/carrier-config/README.md` from the project root for
-the source preparation order. Records 112–113 are already applied to the active
-tree. Raw MCC/MNC strings remain preserved.
-The A17 MMTEL selection overlay retains its original signed resources. Its
-resource-only Make declaration does not generate DEX/OAT; preparation rejects
-a changed input containing DEX, while APK signature/resource checks remain.
-Current integration and device acceptance are maintained in
+Raw MCC/MNC strings are preserved. The source preparation order and pinned patches
+are described in
+[carrier configuration preparation](../../../../scripts/source-patches/carrier-config/README.md).
+
+The A17 MMTEL selection overlay keeps its original signed resources. Its Make
+declaration installs it as a presigned resource-only APK with dexpreopt disabled.
+Preparation rejects inputs containing DEX and requires `resources.arsc`. APK
+signature and resource checks run during the product build.
+
+Current PixelOS integration and device acceptance are recorded in
 [progress](../../../../docs/pixelos/progress.md). Historical module v6 results
-only cover their recorded runtime environment.
-
-Source preparation uses the provided Android and official filesystem paths.
-It assembles the complete private bundle before publication and rejects a different
-existing bundle. Source builds do not wipe data or operate a phone. Installation
-and recovery instructions belong to the selected image release.
-
-Reference-project ROM and module results do not establish PixelOS call-audio
-or call-stability acceptance.
+describe that release's recorded runtime environment. Device installation and
+recovery follow the instructions for the selected image release.
 
 ## Source ownership
 
-The maintained APK transformation is the adjacent `patch-apk.py`; `prepare.py`
-retains its legacy PROJECT argument but no longer consumes module packaging
-sources. The product audio adapter is maintained in `../ims-audio-adapter/`,
-including its product install location, init rc and AIDL metadata. The old
-SukiSU adapter is frozen historical source and must not overwrite this tree.
-PixelOS independently owns this product source; see [PixelOS source ownership](../../../../docs/pixelos/source-ownership.md).
-The [ROM source ownership record](../../../../docs/pixelos/source-ownership.md) is external provenance only.
+The APK transformation is maintained in the adjacent `patch-apk.py`. `prepare.py`
+keeps its legacy PROJECT argument for existing commands and uses this adjacent
+transformation. This project also maintains the product audio adapter in
+`../ims-audio-adapter/`, including its product install location, init rc and AIDL
+metadata. The frozen SukiSU adapter belongs to the historical module sources.
+Maintained code and upstream inputs are identified in the
+[source ownership record](../../../../docs/pixelos/source-ownership.md).

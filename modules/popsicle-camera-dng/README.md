@@ -25,12 +25,11 @@
 
 ## 历史验证范围
 
-v0.2用户五次实拍已确认UltraRAW、普通RAW、50M RAW及两种JPG实际保存并入库，但用户随后发现UltraRAW偏洋红；保存/解码通过不能代表颜色正常。
+v0.2 用户五次实拍已确认 UltraRAW、普通 RAW、50M RAW 及两种 JPG 实际保存并入库，随后发现 UltraRAW 偏洋红。
 
-v0.3使用此前真实UltraRAW压缩payload、同次捕获的awbFrameParams及真实平台DNG模板运行生产tile写入器：
-AnalogBalance与原厂量化规则一致，AsShotNeutral为(1,1,1)；LibRaw解码像素与v0.2逐像素相同，预览可解码，显影不再施加原传感器红/蓝白平衡倍数，对照整体洋红消失。
-本验证覆盖写入器及标签，不等同于新APK安装后的实拍或原厂色彩完全一致。
-后续同源v0.3修复已完成完整ROM构建并获用户整包验收，结果以[交付记录](../../docs/pixelos/validation.md)为准，不补写未报告的逐模式专项测试。该模块维护入口不授权设备操作。
+v0.3 使用此前真实 UltraRAW 压缩 payload、同次捕获的 awbFrameParams 及真实平台 DNG 模板运行生产 tile 写入器。
+AnalogBalance 与原厂量化规则一致，AsShotNeutral 为 (1,1,1)。LibRaw 解码像素与 v0.2 逐像素相同，预览可解码，显影跳过原传感器红/蓝白平衡倍数，对照整体洋红消失。
+上述结果来自写入器及标签验证。后续同源 v0.3 修复已完成完整 ROM 构建并获用户整包验收，结果见[交付记录](../../docs/pixelos/validation.md)。新 APK 的逐模式实拍和原厂色彩专项对照仍待记录。
 
 ## 固定旧基线的诊断与构建
 
