@@ -7,6 +7,9 @@
 范围、固定来源和验证结果集中记录于
 [源码发布说明](source-publication.md)。新树准备使用裁剪后的生产补丁序列。
 
+日常维护已切换到服务器 `/root/autodl-tmp/popsicle-rom-dev/`，源码副本、Git 对象
+与输入环境检查通过，新 OUT 的 lunch 入口验收完成。完整重建待数据卷扩容后执行。
+
 ## 已有成品
 
 最近一次已交付成品为 `PixelOS-popsicle-20261106-storage-fix_by_Kanoe.tar.gz`，

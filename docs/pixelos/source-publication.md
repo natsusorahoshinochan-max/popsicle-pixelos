@@ -110,6 +110,71 @@ Soong 中间产物以供导出使用。导出结果为 `complete=true`、`image_
 
 本次成品的设备验收状态为 `pending-user-test-from-A16`，真机运行验收待完成。
 
+### 2026-11-08 工作区迁移
+
+服务器开发根已切换为 `/root/autodl-tmp/popsicle-rom-dev/`。原计划路径
+`/root/autodl-tmp/popsicle-rom/` 保存着 9 月旧仓库，继续保留其源码与历史。
+本机日常维护使用独立的 `popsicle-pixelos-rom` 工作区，原混合工作区保留
+LOFIC、原始采集、逆向资料和 Git 历史。
+
+迁移验收使用维护提交 `11c6b9c54b9be8b9ebeaa02a6b68d44c1fd19277`。
+该提交与完整构建使用的 `be5dfef` 之间均为 Markdown 修改，生产源码、补丁和
+helper 内容一致。139 个设备树文件与 32 份安装 helper 核对通过，设备副本仅刷新
+三份 README。
+
+目录通过同卷移动完成切换，原路径保留相对兼容链接。
+
+| 原位置 | 新开发根下的位置 |
+|---|---|
+| `pixelos-publication-build-20261108/` 任务根 | `archive/validation-20261108/` |
+| 原任务的 `project/`、`android/`、`cache/`、`tmp/` | 根下同名目录 |
+| 原任务的 `artifacts/` | `releases/20261108/` |
+| 原 Android 树的 `out-pixelos-user/` | `archive/validation-20261108/out-pixelos-user/` |
+| `pixelos-bringup/implementation/storage-rom-20261106/` | `releases/20261106/` |
+
+完整构建任务的脚本、失败与成功日志、状态记录均随目录保存。11 月 6 日与
+11 月 8 日成品继续按各自版本归档，来源 JSON 保留生成时的绝对路径。
+历史 OUT 的 host 仍指向 `/tmp/pixelos-build-output-20261108/host`，旧 assembly
+仍使用 `/tmp/pixelos-publication-assembly-20261108`。
+历史 OUT 中的失效缓存链接随原目录保存，target-files 与 release 中的 ZIP 保持
+同一 inode，硬链接数为 `2`。
+
+R8 下载、AICore 六份原件和三平台工具已迁入新根的 `inputs/` 与 `tools/`。
+33 个输入与工具文件的 inode、属性与内容核对通过。
+AICore 原件与已准备 APK-set 内载荷一致，独立 Turbo 原件通过锁定摘要检查。
+官方固件库继续使用 `/root/autodl-tmp/popsicle-firmware/`。
+
+宿主环境已在最终路径重建，Python 3.12.3、protobuf 5.29.5 和 `pip check` 通过。
+12 份私有来源记录的 SHA256 保持。UID 65534 下的缓存、临时目录和 OUT 可写，
+payload、原始镜像目录、A16 脚本及已准备私有输入可读，R8 与 Turbo 检查通过。
+独立 UID 运行器的失败退出检查通过，任务结束后 `/root` 恢复 `0700`。
+
+1,172 个 Git 对象库已同卷迁入 `archive/git-objects/.repo/project-objects/`。
+归档保存旧对象集合，新树保留可写对象目录并直接引用归档，旧树对象路径通过
+兼容链接读取归档。
+新旧项目各自保留 refs、reflog、shallow 和配置。两树各 1,222 个 checkout 的引用、
+reflog 读取及 `git fsck --connectivity-only` 全部通过，共 2,444 次，退出码为 `0`。
+归档内 18,141 个文件与 18,293 个目录的 inode、mtime、UID/GID、mode、xattr 和
+链接数核对通过，文件大小一致。XFS 目录的 `st_size` 差异归一化比较，原始清单保留。
+
+16 个共享对象组覆盖的 66 个 checkout 保留原配置，实际访问检查确认构建 UID
+对全部 1,172 个归档对象库拥有只读权限。`repo.reference` 指向新归档，
+`repo.dissociate` 为 false。repo 工具的 origin 已改为官方来源，提交保持
+`b85886fa9f5b4e2189cc5b2f40bd0a80459d4c77`。
+
+原厂输入的正式 `prepare-source-inputs.py --check` 由 root 执行并通过，覆盖
+固件与 provider 字节、121 份背屏资源、原 APK 与 PAG 库及相机输入。
+UID 65534 已在新 OUT 执行 envsetup 与 `lunch custom_popsicle-cp2a-user`，解析结果为
+`TARGET_PRODUCT=custom_popsicle`、`user`、SDK 37，输出路径与 `TMPDIR` 同卷检查通过。
+输入检查与 lunch 退出码均为 `0`，运行器退出后 `/root` 恢复 `0700`。
+lunch 日志记录宿主 nsjail 不可用及屏幕宽度采用默认值的提示。
+
+迁移清单、对象库日志和验收结果保存在 `archive/validation-20261108/migration/`，
+目录移动总账位于 `archive/directory-migration.json`。
+
+目录切换前数据卷可用约 24.2 GiB。新 OUT 的完整重建、导出与打包复验待扩容后
+执行，容量按 250 GiB 可用空间编制预算。
+
 ## 维护入口
 
 准备命令见[源码准备](../../scripts/build-support/source-release.md)，安装起点与分区行为见

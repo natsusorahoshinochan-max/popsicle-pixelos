@@ -29,6 +29,38 @@ recovery、update_engine 和原厂 64 位、4 KiB ABI。
 维护仓库放在 Android 树之外，设备 `source-config.mk` 中的 `POPSICLE_PROJECT_INPUTS`
 指向当前维护副本。设备源码和 helper 对应同一发布提交。
 
+本机 ROM 维护使用独立的 `popsicle-pixelos-rom` 工作区。服务器开发根为
+`/root/autodl-tmp/popsicle-rom-dev/`。
+
+| 根目录下的路径 | 用途 |
+|---|---|
+| `project/` | ROM 维护仓库 |
+| `android/` | 已装配的 Android 源码及树内私有 vendor |
+| `inputs/`、`tools/` | ROM 专用原件及固定工具 |
+| `env/` | 宿主环境和路径配置 |
+| `cache/`、`tmp/` | 宿主缓存和临时文件 |
+| `out/custom_popsicle-user/` | 日常构建输出 |
+| `releases/` | 按版本保存的成品与交付目录 |
+| `archive/git-objects/` | 只读 Git 对象归档 |
+| `archive/validation-20261108/` | 原完整构建任务与日志 |
+
+官方固件库保持在 `/root/autodl-tmp/popsicle-firmware/`，私有准备产物使用
+Android 树内的真实 vendor 目录。
+
+宿主使用 `env/build-support-venv/`，Python 为 3.12.3，protobuf 固定为 5.29.5。
+通过 `source /root/autodl-tmp/popsicle-rom-dev/env/build.env` 载入环境。
+`POPSICLE_OUT` 保存输出绝对路径，`OUT_DIR` 使用相对 Android 根的
+`../out/custom_popsicle-user`，与正式构建包装器的路径一致。
+构建中间文件与 Soong 临时文件放在同一文件系统。
+
+当前宿主的原厂 `product/etc/build.prop` 保留 root 所有权及 `0600` 权限，输入准备和
+校验由 root 执行。编译与导出使用 UID 65534，通过 `env/run-as-builder.py` 执行
+工作区内的任务脚本。运行器临时授予该 UID 对 `/root` 的穿越权限，任务退出后恢复 `0700`。
+
+Git 对象归档对构建 UID 只读，新对象写入 Android 树内各对象库的可写目录。
+对象维护沿用 repo 的共享规则，手工 repack 使用 `--local`，`repo.dissociate`
+保持关闭。旧树保留历史引用与 reflog，冻结其 Git 维护。
+
 ROM 构建使用 Linux 环境。工具链、输入、输出和发布目录由构建入口显式指定，命令见
 [源码准备](../../scripts/build-support/source-release.md)。完整正式序列用于尚未装配的固定基线，
 已装配树按实际增量维护。
