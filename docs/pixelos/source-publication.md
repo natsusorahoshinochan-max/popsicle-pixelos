@@ -162,6 +162,9 @@ reflog 读取及 `git fsck --connectivity-only` 全部通过，共 2,444 次，�
 `repo.dissociate` 为 false。repo 工具的 origin 已改为官方来源，提交保持
 `b85886fa9f5b4e2189cc5b2f40bd0a80459d4c77`。
 
+后续复核补正了两条 manifest Git hook 的旧相对路径，链接指向新树自带的 repo hook。
+修复前的链接与属性已归档，重复执行通过，`.repo` 的 6,006 条符号链接均有效。
+
 原厂输入的正式 `prepare-source-inputs.py --check` 由 root 执行并通过，覆盖
 固件与 provider 字节、121 份背屏资源、原 APK 与 PAG 库及相机输入。
 UID 65534 已在新 OUT 执行 envsetup 与 `lunch custom_popsicle-cp2a-user`，解析结果为
@@ -172,8 +175,9 @@ lunch 日志记录宿主 nsjail 不可用及屏幕宽度采用默认值的提示
 迁移清单、对象库日志和验收结果保存在 `archive/validation-20261108/migration/`，
 目录移动总账位于 `archive/directory-migration.json`。
 
-目录切换前数据卷可用约 24.2 GiB。新 OUT 的完整重建、导出与打包复验待扩容后
-执行，容量按 250 GiB 可用空间编制预算。
+本次复核时数据卷可用约 24.1 GiB。三个旧 OUT 的可回收空间约 235.3 GiB，
+清理后预计可用约 259.4 GiB。新 OUT 的完整重建、导出与打包复验在满足
+250 GiB 可用空间预算后执行。
 
 ## 维护入口
 
