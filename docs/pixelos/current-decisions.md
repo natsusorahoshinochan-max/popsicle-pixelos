@@ -38,14 +38,14 @@ recovery、update_engine 和原厂 64 位、4 KiB ABI。
 | `android/` | 已装配的 Android 源码及树内私有 vendor |
 | `inputs/`、`tools/` | ROM 专用原件及固定工具 |
 | `env/` | 宿主环境和路径配置 |
-| `cache/`、`tmp/` | 宿主缓存和临时文件 |
+| `work/cache/`、`work/tmp/` | 宿主缓存和临时文件 |
 | `android/out-pixelos-user/` | 日常构建输出 |
 | `releases/` | 按版本保存的成品与交付目录 |
-| `archive/git-objects/` | 只读 Git 对象归档 |
-| `archive/history/` | 原始 Git 历史与独有源码 |
+| `android/.repo/reference/` | 只读 Git 对象归档 |
+| `history/source/` | 原始 Git 历史与独有源码 |
 
-原厂输入使用项目内的 `inputs/firmware/OS4.0.0.23.XPBCNXM/`，包含 payload、
-分区镜像、内容解包目录及 A16 安装脚本。私有准备产物使用 Android 树内的真实 vendor 目录。
+原厂 payload 与 A16 安装脚本保存在 `inputs/firmware/OS4.0.0.23.XPBCNXM/`，
+分区镜像和解包文件系统保存在 `work/firmware/OS4.0.0.23.XPBCNXM/`。私有准备产物使用 Android 树内的真实 vendor 目录。
 
 宿主使用 `env/build-support-venv/`，Python 为 3.12.3，protobuf 固定为 5.29.5。
 通过 `source /root/autodl-tmp/pixelos-popsicle/env/build.env` 载入环境。

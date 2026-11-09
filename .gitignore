@@ -44,3 +44,15 @@ __pycache__/
 .venv/
 venv/
 *.log
+
+/inputs/
+
+/tools/
+
+/env/
+
+/work/
+
+/releases/
+
+/history/

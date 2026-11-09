@@ -99,11 +99,11 @@ Soong 中间产物以供导出使用。导出结果为 `complete=true`、`image_
 读取检查通过，于 2026-11-08 19:27:21 完成（Asia/Taipei）。
 
 本次成品现保存于 `/root/autodl-tmp/pixelos-popsicle/releases/20261108/`。
-构建日志为 `build.log`，原临时验证目录已清理。
+构建日志为 `logs/build.log`，原临时验证目录已清理。
 
-- `release/target_files.zip` 为 13,276,126,295 字节，SHA256 为
+- `target_files.zip` 为 13,276,126,295 字节，SHA256 为
   `912dcef97e37c96f263d8db28f88362cc601569f7398f5ecba775c8a83586b9b`。
-- `delivery/PixelOS-popsicle-20261108-source-validation_by_Kanoe.tar.gz` 为
+- `PixelOS-popsicle-20261108-source-validation_by_Kanoe.tar.gz` 为
   6,896,506,929 字节，SHA256 为
   `ca50dab07f68aab50ea54366f615887f0a5866938a2ca26f47ac74c44d5cbd2b`。
 
@@ -118,11 +118,11 @@ PixelOS 的维护入口为本机 `popsicle-pixelos-rom/` 和服务器
 
 LineageOS 和 LOFIC 分别使用 `/root/autodl-tmp/lineageos-popsicle/` 与
 `/root/autodl-tmp/17ultra-lofic/`。两个 ROM 各自拥有版本化固件快照。
-剩余原厂固件与提取资料归入 LOFIC 的 `inputs/firmware/`。
+LOFIC 原厂固件归入 `inputs/firmware/`，提取资料归入 `work/firmware/`，拥有独立 A17 payload 与镜像副本。
 
 旧 `pixelos-17/`、`pixelos-bringup/`、`popsicle-source/` 与公共
 `popsicle-firmware/` 入口已退出。原始 Git 历史、独有源码、签名和研究资料保留在
-各自项目中。PixelOS 的 `archive/git-objects/` 仍是活动树使用的只读对象库。
+各自项目中。PixelOS 的 `android/.repo/reference/` 仍是活动树使用的只读对象库。
 
 一次性迁移、清退、恢复测试及隔离验收工具，连同其脚本副本、临时目录、重复验证
 材料和运行状态文件已删除。正常源码准备、构建和交付使用本仓库的正式入口。
@@ -137,8 +137,8 @@ LineageOS 和 LOFIC 分别使用 `/root/autodl-tmp/lineageos-popsicle/` 与
 退出码为 `0`，50 镜像导出和三平台打包通过。构建与交付于
 2026-11-09 06:49:22（Asia/Taipei）完成。
 
-成品位于 `/root/autodl-tmp/pixelos-popsicle/releases/20261109-isolated-attempt2/`，
-其中 `release/target_files.zip`、`delivery/`、`export-host/` 和 `logs/` 保留。
+成品位于 `/root/autodl-tmp/pixelos-popsicle/releases/20261109/`，
+其中 `target_files.zip`、交付包、`export-host/` 和 `logs/` 直接位于版本目录。
 交付包为 `PixelOS-popsicle-20261109-isolated_by_Kanoe.tar.gz`，
 大小 6,896,506,642 字节，摘要见同目录 `.sha256`。
 目录迁移收尾沿用这次成功结果，没有重新启动完整构建。真机验收待完成。
