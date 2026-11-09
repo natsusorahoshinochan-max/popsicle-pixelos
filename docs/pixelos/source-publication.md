@@ -98,9 +98,8 @@ Soong 中间产物以供导出使用。导出结果为 `complete=true`、`image_
 交付包包含 Windows、macOS、Linux 安装入口，包内 SHA256、归档摘要和完整归档
 读取检查通过，于 2026-11-08 19:27:21 完成（Asia/Taipei）。
 
-本次验证目录为 `/root/autodl-tmp/pixelos-publication-build-20261108/`，
-产物保存于 `artifacts/`。构建、交付日志与静态内容审查结果分别保存于
-`logs/build-success.log`、`logs/finish.log` 和 `logs/central-directory-content-audit.json`。
+本次成品现保存于 `/root/autodl-tmp/pixelos-popsicle/releases/20261108/`。
+构建日志为 `build.log`，原临时验证目录已清理。
 
 - `release/target_files.zip` 为 13,276,126,295 字节，SHA256 为
   `912dcef97e37c96f263d8db28f88362cc601569f7398f5ecba775c8a83586b9b`。
@@ -110,106 +109,39 @@ Soong 中间产物以供导出使用。导出结果为 `complete=true`、`image_
 
 本次成品的设备验收状态为 `pending-user-test-from-A16`，真机运行验收待完成。
 
-### 2026-11-08 工作区迁移
+### 2026-11-09 三项目迁移完成
 
-服务器开发根已切换为 `/root/autodl-tmp/popsicle-rom-dev/`。原计划路径
-`/root/autodl-tmp/popsicle-rom/` 保存着 9 月旧仓库，继续保留其源码与历史。
-本机日常维护使用独立的 `popsicle-pixelos-rom` 工作区，原混合工作区保留
-LOFIC、原始采集、逆向资料和 Git 历史。
+PixelOS 的维护入口为本机 `popsicle-pixelos-rom/` 和服务器
+`/root/autodl-tmp/pixelos-popsicle/`。服务器内 `project/` 保存维护源码，
+`android/` 保存活动 Android 树，`inputs/`、`tools/`、`env/` 分别保存本项目输入、
+工具与环境。日常输出为 `android/out-pixelos-user/`。
 
-迁移验收使用维护提交 `11c6b9c54b9be8b9ebeaa02a6b68d44c1fd19277`。
-该提交与完整构建使用的 `be5dfef` 之间均为 Markdown 修改，生产源码、补丁和
-helper 内容一致。139 个设备树文件与 32 份安装 helper 核对通过，设备副本仅刷新
-三份 README。
+LineageOS 和 LOFIC 分别使用 `/root/autodl-tmp/lineageos-popsicle/` 与
+`/root/autodl-tmp/17ultra-lofic/`。两个 ROM 各自拥有版本化固件快照。
+剩余原厂固件与提取资料归入 LOFIC 的 `inputs/firmware/`。
 
-迁移时，目录通过同卷移动完成切换，原路径建立相对兼容链接。
+旧 `pixelos-17/`、`pixelos-bringup/`、`popsicle-source/` 与公共
+`popsicle-firmware/` 入口已退出。原始 Git 历史、独有源码、签名和研究资料保留在
+各自项目中。PixelOS 的 `archive/git-objects/` 仍是活动树使用的只读对象库。
 
-| 原位置 | 新开发根下的位置 |
-|---|---|
-| `pixelos-publication-build-20261108/` 任务根 | `archive/validation-20261108/` |
-| 原任务的 `project/`、`android/`、`cache/`、`tmp/` | 根下同名目录 |
-| 原任务的 `artifacts/` | `releases/20261108/` |
-| 原 Android 树的 `out-pixelos-user/` | `archive/validation-20261108/out-pixelos-user/` |
-| `pixelos-bringup/implementation/storage-rom-20261106/` | `releases/20261106/` |
+一次性迁移、清退、恢复测试及隔离验收工具，连同其脚本副本、临时目录、重复验证
+材料和运行状态文件已删除。正常源码准备、构建和交付使用本仓库的正式入口。
 
-完整构建任务的脚本、失败与成功日志、状态记录均随目录保存。11 月 6 日与
-11 月 8 日成品继续按各自版本归档，来源 JSON 保留生成时的绝对路径。
-迁移验收时，历史 OUT 的 host 指向 `/tmp/pixelos-build-output-20261108/host`，
-失效缓存链接随原目录保存，target-files 与 release 中的 ZIP 为同一 inode，
-硬链接数为 `2`。旧 assembly 使用 `/tmp/pixelos-publication-assembly-20261108`。
+迁移期间的 Git 查询刷新了 1,409 份远端索引及 1 份本机索引的原缓存字节。
+原任务已核对提交、引用、暂存条目和未提交文件；原缓存字节缺口保留此记录。
 
-R8 下载、AICore 六份原件和三平台工具已迁入新根的 `inputs/` 与 `tools/`。
-33 个输入与工具文件的 inode、属性与内容核对通过。
-AICore 原件与已准备 APK-set 内载荷一致，独立 Turbo 原件通过锁定摘要检查。
-官方固件库继续使用 `/root/autodl-tmp/popsicle-firmware/`。
+### 最终路径构建结果
 
-宿主环境已在最终路径重建，Python 3.12.3、protobuf 5.29.5 和 `pip check` 通过。
-12 份私有来源记录的 SHA256 保持。UID 65534 下的缓存、临时目录和 OUT 可写，
-payload、原始镜像目录、A16 脚本及已准备私有输入可读，R8 与 Turbo 检查通过。
-独立 UID 运行器的失败退出检查通过，任务结束后 `/root` 恢复 `0700`。
+维护源码以 `f10bed34c0c79d52d8915893def28d6d0442b317` 为基线，使用项目内输入，
+在其他项目和旧公共路径不可访问时完成全新构建。构建耗时 6 小时 17 分 38 秒，
+退出码为 `0`，50 镜像导出和三平台打包通过。构建与交付于
+2026-11-09 06:49:22（Asia/Taipei）完成。
 
-1,172 个 Git 对象库已同卷迁入 `archive/git-objects/.repo/project-objects/`。
-归档保存旧对象集合，新树保留可写对象目录并直接引用归档，旧树对象路径通过
-兼容链接读取归档。
-新旧项目各自保留 refs、reflog、shallow 和配置。两树各 1,222 个 checkout 的引用、
-reflog 读取及 `git fsck --connectivity-only` 全部通过，共 2,444 次，退出码为 `0`。
-归档内 18,141 个文件与 18,293 个目录的 inode、mtime、UID/GID、mode、xattr 和
-链接数核对通过，文件大小一致。XFS 目录的 `st_size` 差异归一化比较，原始清单保留。
-
-16 个共享对象组覆盖的 66 个 checkout 保留原配置，实际访问检查确认构建 UID
-对全部 1,172 个归档对象库拥有只读权限。`repo.reference` 指向新归档，
-`repo.dissociate` 为 false。repo 工具的 origin 已改为官方来源，提交保持
-`b85886fa9f5b4e2189cc5b2f40bd0a80459d4c77`。
-
-后续复核补正了两条 manifest Git hook 的旧相对路径，链接指向新树自带的 repo hook。
-修复前的链接与属性已归档，重复执行通过，`.repo` 的 6,006 条符号链接均有效。
-
-原厂输入的正式 `prepare-source-inputs.py --check` 由 root 执行并通过，覆盖
-固件与 provider 字节、121 份背屏资源、原 APK 与 PAG 库及相机输入。
-UID 65534 已在新 OUT 执行 envsetup 与 `lunch custom_popsicle-cp2a-user`，解析结果为
-`TARGET_PRODUCT=custom_popsicle`、`user`、SDK 37，输出路径与 `TMPDIR` 同卷检查通过。
-输入检查与 lunch 退出码均为 `0`，运行器退出后 `/root` 恢复 `0700`。
-lunch 日志记录宿主 nsjail 不可用及屏幕宽度采用默认值的提示。
-
-迁移清单、对象库日志和验收结果保存在 `archive/validation-20261108/migration/`，
-目录移动总账位于 `archive/directory-migration.json`。
-
-迁移验收后复核时，数据卷可用约 24.1 GiB。新 OUT 的完整重建、导出与打包
-复验按 250 GiB 可用空间编制预算。
-
-### 2026-11-08 首批旧 OUT 清理
-
-- `/root/autodl-tmp/pixelos-17/out-pixelos-user`
-- `/root/autodl-tmp/pixelos-17/out-source-publication`
-- `/root/autodl-tmp/popsicle-rom-dev/archive/validation-20261108/out-pixelos-user`
-
-三个目录已删除，清理脚本复核通过，退出码为 `0`。删除前归档了 149 个构建
-证据文件，共 912,363,488 字节（0.850 GiB），摘要与属性复验通过。清理状态、
-日志及证据保存在 `archive/validation-20261108/cleanup/20261108-old-outs/`。
-
-原 Android 树的 `out-pixelos-user` 兼容链接已退役，原链接文本和属性保存在
-清理档案的 `retired-alias.json` 与 `retired-out-alias`。
-
-清理后的独立复核通过。两期 target-files 和交付归档共四份成品的全文件 SHA256
-均与既有值一致。11 月 8 日 target-files ZIP 的 inode 与内容核对通过，硬链接数
-从 `2` 降为 `1`。
-
-139 个设备树文件、32 份 helper、12 份来源记录、工具环境和 export-host 校验通过。
-新 OUT 的 737 项与基线一致。1,172 条 alternates、6,006 条 Git 元数据链接、归档对象清单
-及两树各 11,101 项 Git 元数据内容摘要复核通过。独立基线、清理后清单、比较结果和
-成品摘要保存在清理档案的 `independent-audit/`。generated、展开交付、A16 raw、
-历史 `/tmp` 目录及源码继续保留。
-
-数据卷可用空间从 24.06 GiB 增至 258.53 GiB，净增 234.48 GiB，已计入证据归档
-占用，使用率从 98% 降至 74%。当前容量达到 250 GiB 的完整重建预算，新 OUT 的
-完整构建、导出与打包复验待执行。
-
-### 2026-11-08 三项目分离
-
-PixelOS 开发根已同卷迁入 `/root/autodl-tmp/pixelos-popsicle/`，Android、维护仓库和
-Git 对象目录的 inode 保持，活动 source-config、环境路径与 repo.reference 已更新。
-LineageOS 和 17ultra-lofic 分别按独立工程整理。项目内固件快照、输入身份及工具环境
-正在迁移，完整构建和独立交付验收待记录。
+成品位于 `/root/autodl-tmp/pixelos-popsicle/releases/20261109-isolated-attempt2/`，
+其中 `release/target_files.zip`、`delivery/`、`export-host/` 和 `logs/` 保留。
+交付包为 `PixelOS-popsicle-20261109-isolated_by_Kanoe.tar.gz`，
+大小 6,896,506,642 字节，摘要见同目录 `.sha256`。
+目录迁移收尾沿用这次成功结果，没有重新启动完整构建。真机验收待完成。
 
 ## 维护入口
 

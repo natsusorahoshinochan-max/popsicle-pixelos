@@ -43,7 +43,8 @@ def git(directory, *arguments):
     # Caller Git environment must not redirect writes to another worktree/index.
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
     return subprocess.check_output(
-        ['git', '-C', str(directory), *arguments], env=env)
+        ['git', '-c', 'safe.directory=' + str(directory),
+         '-C', str(directory), *arguments], env=env)
 
 
 class Replay:
