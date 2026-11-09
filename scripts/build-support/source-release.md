@@ -18,8 +18,9 @@ cp .env.example .env
 source .env
 ```
 
-`.env` 不入 Git。`BUILD_JOBS` 和 `NINJA_HIGHMEM_NUM_JOBS` 按宿主资源设置；默认
-为 8 和 2。源码、固件和完整 OUT 合计需要数百 GiB 空间。准备、编译和导出使用同一
+`.env` 不入 Git。宿主建议至少 64 GiB RAM；`BUILD_JOBS` 和 `NINJA_HIGHMEM_NUM_JOBS`
+按资源设置，默认为 8 和 2。`GOMEMLIMIT=40GiB` 是 Soong 的 Go 堆软限制。
+源码、固件和完整 OUT 合计需要数百 GiB 空间。准备、编译和导出使用同一
 普通用户拥有的目录。现有服务器的专用 UID 运行器属于该宿主配置，新机器直接运行本文命令。
 
 ## 2. 宿主依赖
@@ -147,6 +148,7 @@ python3 scripts/build-support/prepare-pixelos-inputs.py all \
 
 ```sh
 export NEW_RELEASE_DIRECTORY="$POPSICLE_WORKSPACE/releases/NEW_VERSION"
+ulimit -n 32768
 bash "$POPSICLE_PROJECT/scripts/build-support/build-fastboot-release.sh" \
   "$ANDROID_TREE" "$POPSICLE_OUT" "$NEW_RELEASE_DIRECTORY" pixelos
 ```
