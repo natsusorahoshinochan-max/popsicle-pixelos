@@ -7,13 +7,15 @@
 ## 准备输入
 
 R8 使用 `https://storage.googleapis.com/r8-releases/raw/9.3.19/` 的固定文件，
-dex2jar 使用 `https://github.com/pxb1988/dex2jar/releases/download/v2.4/dex-tools-v2.4.zip`。
-下载目录中的身份由现有锁文件核对。
+dex2jar 使用 `https://github.com/pxb1988/dex2jar/releases/download/v2.4/dex-tools-v2.4.zip?download=1`。
+下载目录中的身份由现有锁文件核对。新机使用[统一准备入口](../../build-support/source-release.md)，
+它自动下载这些工具，并读取固定上游树中的 TurboAdapter；无需另备该 APK。
+以下为需要单独执行时的等价步骤：
 
 ```sh
 python3 install-r8.py --apply ANDROID_TREE DOWNLOAD_DIRECTORY
 python3 prepare-inputs.py ANDROID_TREE \
-  --apk /path/to/original/TurboAdapter.apk \
+  --apk ANDROID_TREE/vendor/pixel/gms/common/proprietary/system_ext/priv-app/TurboAdapter/TurboAdapter.apk \
   --dex-tools DOWNLOAD_DIRECTORY/dex-tools-v2.4.zip
 ```
 

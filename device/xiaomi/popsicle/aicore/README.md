@@ -37,7 +37,8 @@ is omitted, the tool uses `aprotoc` from that directory. The convenience
 The tool wraps the unchanged APKs in an `android_app_set` archive under
 `vendor/xiaomi/popsicle-private/prebuilt/aicore/`. Original APK signatures remain
 intact. Prepare this input before building the product that selects
-`PopsicleAICore`; an already prepared input is not overwritten.
+`PopsicleAICore`. Repeating preparation rechecks the original signatures and compares
+all archive members and declarations; identical input is reused and conflicts fail.
 
 Installed service availability is separate from Google model delivery and
 successful inference. The original permissions, signature policy and hardware

@@ -63,7 +63,7 @@ AICore 使用固定树自带 SDK 工具、JDK 和宿主 `protoc` 完成准备，
 的 Google 签名、包名、split 身份及统一版本已检查，原 APK 字节保持。准备产物
 先在私有临时目录生成，再原子发布。
 
-原始 A17 payload 的全部分区提取、六个所需 EROFS 文件系统内容解包和版本检查
+原始 A17 payload 的全部分区提取、所需 EROFS 文件系统内容解包和版本检查
 已由本仓库提取入口完成。原始镜像保留 Android 元数据，解包目录用于读取原件内容。
 
 Python、Shell 和补丁语法检查、本地文档链接检查及迁移差异审查已完成。
@@ -98,8 +98,8 @@ Soong 中间产物以供导出使用。导出结果为 `complete=true`、`image_
 交付包包含 Windows、macOS、Linux 安装入口，包内 SHA256、归档摘要和完整归档
 读取检查通过，于 2026-11-08 19:27:21 完成（Asia/Taipei）。
 
-本次成品现保存于 `/root/autodl-tmp/pixelos-popsicle/releases/20261108/`。
-构建日志为 `logs/build.log`，原临时验证目录已清理。
+该旧版成品和临时验证目录已清理，服务器只保留下文的 20261109 成品。
+以下摘要用于标识这次历史验证：
 
 - `target_files.zip` 为 13,276,126,295 字节，SHA256 为
   `912dcef97e37c96f263d8db28f88362cc601569f7398f5ecba775c8a83586b9b`。
@@ -116,8 +116,9 @@ PixelOS 的维护入口为本机 `popsicle-pixelos-rom/` 和服务器
 `android/` 保存活动 Android 树，`inputs/`、`tools/`、`env/` 分别保存本项目输入、
 工具与环境。日常输出为 `android/out-pixelos-user/`。
 
-LineageOS 和 LOFIC 分别使用 `/root/autodl-tmp/lineageos-popsicle/` 与
-`/root/autodl-tmp/17ultra-lofic/`。两个 ROM 各自拥有版本化固件快照。
+迁移时 LineageOS 和 LOFIC 分别使用 `/root/autodl-tmp/lineageos-popsicle/` 与
+`/root/autodl-tmp/17ultra-lofic/`。随后按用户要求删除了远端 LineageOS 工作区；
+当前 PixelOS 工作不再准备或验证 LineageOS。
 LOFIC 原厂固件归入 `inputs/firmware/`，提取资料归入 `work/firmware/`，拥有独立 A17 payload 与镜像副本。
 
 旧 `pixelos-17/`、`pixelos-bringup/`、`popsicle-source/` 与公共
@@ -142,6 +143,24 @@ LOFIC 原厂固件归入 `inputs/firmware/`，提取资料归入 `work/firmware/
 交付包为 `PixelOS-popsicle-20261109-isolated_by_Kanoe.tar.gz`，
 大小 6,896,506,642 字节，摘要见同目录 `.sha256`。
 目录迁移收尾沿用这次成功结果，没有重新启动完整构建。真机验收待完成。
+
+### 2026-11-09 新机输入准备
+
+新机入口接受固定官方 OTA ZIP 或其原始 payload，加完整 AICore 六分包。
+固定 R8/dex2jar 下载、上游 TurboAdapter 读取、固件提取和现有私有输入准备已串联；
+工具源码版本、安装步骤和 `.env.example` 见[新机准备](../../scripts/build-support/source-release.md)。
+构建和导出使用仓库内 42 项安装契约，无需另备 A16 脚本。
+
+本轮使用真实原始 payload，从空私有目录重新生成输入并完成重复执行。
+已核对全部 58 个分区及七个所需文件系统，补齐 `mi_ext` 后运营商配置与原完整结果
+逐字节相同。243 个准备文件的对比中，原厂副本保持一致；AICore 归档成员字节一致；
+相机 9,288 个类和背屏 5,347 个类的反汇编内容分别完全一致，DEX 字节排列可随组装变化。
+背屏 Apktool 框架缓存已限定在现有临时目录，不依赖宿主账户缓存。
+
+payload-dumper-go 与 EROFS 已按固定上游源码编译；六份 R8 和 dex2jar 已重新从官方
+地址下载并通过固定摘要校验。新安装契约与原 A16 脚本在真实 payload 上得到相同的
+42 个固件顺序、长度、内容摘要和目标槽位。Python/Shell、异常输入和文档链接检查通过。
+本轮全新源码同步及完整构建验收尚未完成，不能以此前成品代替这项验收。
 
 ## 维护入口
 

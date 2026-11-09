@@ -1,0 +1,177 @@
+{
+  "device": "popsicle",
+  "supported_base": "OS3.0.318.0",
+  "firmware": "OS4.0.0.23.XPBCNXM",
+  "source_script": "Xiaomi A16 fastboot flash_all_macos.sh",
+  "source_sha256": "13536c1cc2332526633d09e7c83adeb3c84e40e5843511e4b17854f3b1ab71b2",
+  "firmware_order": [
+    {
+      "partition": "abl",
+      "a16_input": "abl.elf"
+    },
+    {
+      "partition": "xbl",
+      "a16_input": "xbl_sc.elf"
+    },
+    {
+      "partition": "xbl_config",
+      "a16_input": "xbl_config.elf"
+    },
+    {
+      "partition": "multiimgqti",
+      "a16_input": "multi_image_qti.mbn"
+    },
+    {
+      "partition": "tme_seq_patch",
+      "a16_input": "sequencer_ram.elf"
+    },
+    {
+      "partition": "tme_fw",
+      "a16_input": "signed_firmware_soc_view.elf"
+    },
+    {
+      "partition": "tme_config",
+      "a16_input": "tme_config.elf"
+    },
+    {
+      "partition": "xbl_ac_config",
+      "a16_input": "xbl_ac_config.mbn"
+    },
+    {
+      "partition": "uefi",
+      "a16_input": "uefi.elf"
+    },
+    {
+      "partition": "aop",
+      "a16_input": "aop.mbn"
+    },
+    {
+      "partition": "aop_config",
+      "a16_input": "aop_devcfg.mbn"
+    },
+    {
+      "partition": "tz",
+      "a16_input": "tz.mbn"
+    },
+    {
+      "partition": "hyp",
+      "a16_input": "hypvmperformance.mbn"
+    },
+    {
+      "partition": "modem",
+      "a16_input": "NON-HLOS.bin"
+    },
+    {
+      "partition": "modemfirmware",
+      "a16_input": "MODEM-FW.bin"
+    },
+    {
+      "partition": "bluetooth",
+      "a16_input": "BTFM.bin"
+    },
+    {
+      "partition": "dsp",
+      "a16_input": "dspso.bin"
+    },
+    {
+      "partition": "keymaster",
+      "a16_input": "keymint.mbn"
+    },
+    {
+      "partition": "spuservice",
+      "a16_input": "spu_service.mbn"
+    },
+    {
+      "partition": "devcfg",
+      "a16_input": "devcfg.mbn"
+    },
+    {
+      "partition": "qupfw",
+      "a16_input": "qupv3fw.elf"
+    },
+    {
+      "partition": "uefisecapp",
+      "a16_input": "uefi_sec.mbn"
+    },
+    {
+      "partition": "imagefv",
+      "a16_input": "imagefv.elf"
+    },
+    {
+      "partition": "shrm",
+      "a16_input": "shrm.elf"
+    },
+    {
+      "partition": "cpucp",
+      "a16_input": "cpucp.elf"
+    },
+    {
+      "partition": "idmanager",
+      "a16_input": "idmanager.mbn"
+    },
+    {
+      "partition": "featenabler",
+      "a16_input": "featenabler.mbn"
+    },
+    {
+      "partition": "xbl_ramdump",
+      "a16_input": "XblRamdump.elf"
+    },
+    {
+      "partition": "cpucp_dtb",
+      "a16_input": "cpucp_dtbs.elf"
+    },
+    {
+      "partition": "soccp",
+      "a16_input": "soccp.bin"
+    },
+    {
+      "partition": "soccp_debug",
+      "a16_input": "sdi.mbn"
+    },
+    {
+      "partition": "soccp_dcd",
+      "a16_input": "dcd.mbn"
+    },
+    {
+      "partition": "pdp",
+      "a16_input": "pdp.elf"
+    },
+    {
+      "partition": "pdp_cdb",
+      "a16_input": "pdp_cdb.elf"
+    },
+    {
+      "partition": "tz_ac_config",
+      "a16_input": "tz_ac_config.mbn"
+    },
+    {
+      "partition": "hyp_ac_config",
+      "a16_input": "hyp_ac_config.mbn"
+    },
+    {
+      "partition": "dcp",
+      "a16_input": "dcp.bin"
+    },
+    {
+      "partition": "tz_qti_config",
+      "a16_input": "tz_qti_config.mbn"
+    },
+    {
+      "partition": "secretkeeper",
+      "a16_input": "secretkeeper.mbn"
+    },
+    {
+      "partition": "vm-bootsys",
+      "a16_input": "vm-bootsys.img"
+    },
+    {
+      "partition": "qtvm_dtbo",
+      "a16_input": "qtvm-dtbo.img"
+    },
+    {
+      "partition": "pvmfw",
+      "a16_input": "pvmfw.img"
+    }
+  ]
+}

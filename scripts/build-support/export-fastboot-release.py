@@ -66,18 +66,20 @@ def copy_file(source, target):
 
 
 def firmware_inputs(args):
-    explicit = (args.payload, args.firmware_images, args.a16_flash_script)
+    explicit = (args.payload, args.firmware_images)
     if args.firmware_root is not None:
-        require(not any(explicit), "Use --firmware-root or all three explicit firmware inputs")
+        require(not any(explicit) and args.a16_flash_script is None,
+                "Use --firmware-root or explicit firmware inputs")
         root = args.firmware_root.resolve()
         return (root / "inputs/popsicle_official_OTA_A17/payload.bin",
                 root / "extracted/a17-payload",
                 root / "inputs/popsicle_official_images_A16/flash_all_macos.sh")
-    require(all(explicit), "Provide --payload, --firmware-images and --a16-flash-script")
-    return tuple(path.resolve() for path in explicit)
+    require(all(explicit), "Provide --payload and --firmware-images")
+    return (*[path.resolve() for path in explicit],
+            args.a16_flash_script.resolve() if args.a16_flash_script else None)
 
 
-def read_firmware(payload, images, script):
+def read_firmware(payload, images, script=None):
     from payload_schema import update_metadata_pb2 as pb
 
     with payload.open("rb") as stream:
@@ -103,9 +105,15 @@ def read_firmware(payload, images, script):
     for p in manifest.partitions:
         require(not p.HasField("old_partition_info") and all(o.type in allowed for o in p.operations),
                 f"partition requires an old input: {p.partition_name}")
-    rows = re.findall(r"flash\s+(\S+)_ab\s+`dirname \$0`/images/(\S+)", script.read_text())
-    selected = [(n, f) for n, f in rows if n in FIRMWARE]
-    require([n for n, _ in selected] == list(FIRMWARE), "A16 firmware order/targets changed")
+    contract = json.loads((SUPPORT / "firmware-install-contract.json").read_text())
+    require(contract["device"] == "popsicle" and contract["supported_base"] == "OS3.0.318.0"
+            and contract["firmware"] == "OS4.0.0.23.XPBCNXM", "Unexpected firmware install contract")
+    selected = [(row["partition"], row["a16_input"]) for row in contract["firmware_order"]]
+    require([n for n, _ in selected] == list(FIRMWARE), "Firmware order/targets changed")
+    if script is not None:
+        rows = re.findall(r"flash\s+(\S+)_ab\s+`dirname \$0`/images/(\S+)", script.read_text())
+        require([(n, f) for n, f in rows if n in FIRMWARE] == selected,
+                "A16 script differs from the recorded install contract")
     partition_map = {p.partition_name: p for p in manifest.partitions}
     results = []
     for name, a16_file in selected:
@@ -201,7 +209,8 @@ def main():
     parser.add_argument("--firmware-root", type=Path, help="Legacy firmware directory layout")
     parser.add_argument("--payload", type=Path)
     parser.add_argument("--firmware-images", type=Path)
-    parser.add_argument("--a16-flash-script", type=Path)
+    parser.add_argument("--a16-flash-script", type=Path,
+                        help="Optional cross-check against the original A16 script")
     parser.add_argument("--output", required=True, type=Path)
     export(parser.parse_args())
 

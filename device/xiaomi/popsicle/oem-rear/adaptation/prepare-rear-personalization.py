@@ -41,7 +41,8 @@ def main():
     sdk = android / 'prebuilts/sdk/current/public/android.jar'
     run = lambda command: subprocess.run(list(map(str, command)), check=True)
     decoded = work / 'decoded'
-    run([java/'java', '-Xmx4g', '-jar', apktool, 'd', '-s', source, '-o', decoded])
+    framework = work / 'apktool-framework'
+    run([java/'java', '-Xmx4g', '-jar', apktool, 'd', '-p', framework, '-s', source, '-o', decoded])
     manifest = decoded/'AndroidManifest.xml'
     namespace = 'http://schemas.android.com/apk/res/android'
     ET.register_namespace('android', namespace)
@@ -92,7 +93,7 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(helper, target)
     run([java/'java', '-Xmx4g', '-jar', smali/'smali.jar', 'a', '--api', '28', '-j', '4', root, '-o', decoded/'classes.dex'])
-    run([java/'java', '-Xmx4g', '-jar', apktool, 'b', decoded, '-o', args.output])
+    run([java/'java', '-Xmx4g', '-jar', apktool, 'b', '-p', framework, decoded, '-o', args.output])
     (work/'provenance.json').write_text(json.dumps({'input_apk': str(source),
         'output_apk': str(args.output), 'sources': list(map(str, sources))}, indent=2)+'\n')
 

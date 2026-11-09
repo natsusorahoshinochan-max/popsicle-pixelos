@@ -1,6 +1,11 @@
 #!/bin/bash
 # Run on the cloud Linux host; reuse the selected user output, never old out-final.
 set -e -o pipefail
+build_jobs=${BUILD_JOBS:-8}
+export NINJA_HIGHMEM_NUM_JOBS=${NINJA_HIGHMEM_NUM_JOBS:-2}
+for count in "$build_jobs" "$NINJA_HIGHMEM_NUM_JOBS"; do
+    [[ "$count" =~ ^[1-9][0-9]*$ ]] || { echo "Build job counts must be positive integers" >&2; exit 2; }
+done
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
     echo "Usage: $0 ANDROID_TREE OUT_DIR NEW_RELEASE_DIRECTORY [pixelos]" >&2
     exit 2
@@ -24,36 +29,33 @@ done
 # Soong stores path spellings in its graph; preserve the tree-relative OUT_DIR.
 export OUT_DIR=$(realpath --relative-to="$tree" "$output")
 if [ -n "${FIRMWARE_ROOT:-}" ]; then
-    if [ -n "${OFFICIAL_PAYLOAD:-}${OFFICIAL_IMAGES:-}${A16_FLASH_SCRIPT:-}" ]; then
-        echo "Set FIRMWARE_ROOT or all three explicit firmware inputs" >&2
+    if [ -n "${OFFICIAL_PAYLOAD:-}${OFFICIAL_IMAGES:-}" ]; then
+        echo "Set FIRMWARE_ROOT or both explicit firmware inputs" >&2
         exit 2
     fi
     OFFICIAL_PAYLOAD="$FIRMWARE_ROOT/inputs/popsicle_official_OTA_A17/payload.bin"
     OFFICIAL_IMAGES="$FIRMWARE_ROOT/extracted/a17-payload"
-    A16_FLASH_SCRIPT="$FIRMWARE_ROOT/inputs/popsicle_official_images_A16/flash_all_macos.sh"
 fi
 if [ ! -f "${OFFICIAL_PAYLOAD:-}" ] || [ ! -r "${OFFICIAL_PAYLOAD:-}" ] ||
-   [ ! -d "${OFFICIAL_IMAGES:-}" ] || [ ! -r "${OFFICIAL_IMAGES:-}" ] ||
-   [ ! -f "${A16_FLASH_SCRIPT:-}" ] || [ ! -r "${A16_FLASH_SCRIPT:-}" ]; then
-    echo "Provide readable OFFICIAL_PAYLOAD, OFFICIAL_IMAGES and A16_FLASH_SCRIPT inputs" >&2
+   [ ! -d "${OFFICIAL_IMAGES:-}" ] || [ ! -r "${OFFICIAL_IMAGES:-}" ]; then
+    echo "Provide readable OFFICIAL_PAYLOAD and OFFICIAL_IMAGES inputs" >&2
     exit 2
 fi
 OFFICIAL_PAYLOAD=$(realpath "$OFFICIAL_PAYLOAD")
 OFFICIAL_IMAGES=$(realpath "$OFFICIAL_IMAGES")
-A16_FLASH_SCRIPT=$(realpath "$A16_FLASH_SCRIPT")
-firmware_args=(--payload "$OFFICIAL_PAYLOAD" --firmware-images "$OFFICIAL_IMAGES" --a16-flash-script "$A16_FLASH_SCRIPT")
+firmware_args=(--payload "$OFFICIAL_PAYLOAD" --firmware-images "$OFFICIAL_IMAGES")
 python=$(command -v python3)
 release=$(realpath -m "$3")
 test ! -e "$release"
 mkdir -p "$release"
 trap 'result=$?; printf "%s\n" "$result" > "$release/exit-code"' EXIT
 cd "$tree"
-export NINJA_HIGHMEM_NUM_JOBS=4 PYTHONDONTWRITEBYTECODE=1
+export PYTHONDONTWRITEBYTECODE=1
 unset USE_CCACHE CCACHE_DIR CCACHE_EXEC USE_GOMA
 export CCACHE_DISABLE=1 USE_RBE=false
 source build/envsetup.sh
 lunch "${target_product}-cp2a-user"
-m -j16 -k20 target-files-package lpmake simg2img img2simg
+m -j"$build_jobs" -k20 target-files-package lpmake simg2img img2simg
 product="$output/target/product/popsicle"
 tf="$product/obj/PACKAGING/target_files_intermediates/${target_product}-target_files"
 host="$output/host/linux-x86/bin"

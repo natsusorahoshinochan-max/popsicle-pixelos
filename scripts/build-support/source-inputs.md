@@ -1,6 +1,6 @@
 # PixelOS 原始输入清单
 
-使用 Xiaomi popsicle 原始 OS4.0.0.23.XPBCNXM 固件。镜像输入目录包含 payload 提取的原始镜像，文件系统输入目录包含其解包后的 `product`、`system_ext`、`vendor`、`odm`、`vendor_dlkm` 和 `system_dlkm` 子目录。原始输入保持只读，不使用其他 ROM 的派生镜像。原始 payload 的分区提取和所需 EROFS 解包使用[输入提取工具](../firmware-analysis/README.md)，输入准备在提取完成后执行。
+使用 Xiaomi popsicle 原始 OS4.0.0.23.XPBCNXM 固件。镜像输入目录包含 payload 提取的原始镜像，文件系统输入目录包含其解包后的 `product`、`system_ext`、`vendor`、`odm`、`vendor_dlkm`、`system_dlkm` 和 `mi_ext` 子目录。`mi_ext` 提供原厂运营商扩展配置，不能省略。原始输入保持只读，不使用其他 ROM 的派生镜像。原始 payload 的分区提取和所需 EROFS 解包使用[输入提取工具](../firmware-analysis/README.md)，输入准备在提取完成后执行。
 
 解包文件系统用于读取原件内容，保留文件权限并使用宿主所有者，宿主目录无需承载 Android 的 SELinux 扩展属性。原始镜像保留完整 UID、GID 和扩展属性，vendor/ODM 生产链通过 `erofs_readback` 直接从镜像读取这些元数据。
 
@@ -22,7 +22,11 @@
 | `oem-rear` | 原始 `subscreencenter.apk`、PAG JAR及native库、权限和NOTICE；适配链输出 `subscreencenter-personalization.apk`；[准备源](../../device/xiaomi/popsicle/oem-rear/) |
 | `oem-camera` | 原始 `MiuiCamera.apk`、CameraOpt/算法JNI库、配置、权限和NOTICE；APK准备链接入DNG及白平衡适配；[准备源](../../device/xiaomi/popsicle/oem-camera/) |
 
-表中输入由 `prepare-source-inputs.py` 准备。AICore单独准备到 `aicore/`，输入为本机Google Play交付的完整APK集合，见[AICore准备](../../device/xiaomi/popsicle/aicore/README.md)。TurboAdapter原始APK、dex2jar与R8输入另按[Turbo/R8契约](../source-patches/turbo-r8/README.md)准备。
+新机使用 `prepare-pixelos-inputs.py all` 串联这些准备步骤。表中输入由现有
+`prepare-source-inputs.py` 处理；AICore 准备到 `aicore/`，仍须提供 Google Play
+交付的固定完整六分包，不能从小米 ROM 还原，见[AICore准备](../../device/xiaomi/popsicle/aicore/README.md)。
+TurboAdapter 直接取自固定上游源码树，dex2jar 与 R8 自动下载并核对摘要，
+见[Turbo/R8契约](../source-patches/turbo-r8/README.md)。
 
 OEM ABI 的新 `SOURCE.json` 使用版本化记录，保存固件版本、分区相对路径、原始 ELF 与
 NOTICE 摘要，以及准备器和 Blueprint 身份。记录可随本项目输入目录移动。旧绝对路径

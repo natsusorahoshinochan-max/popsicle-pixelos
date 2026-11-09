@@ -56,8 +56,8 @@ def main():
     target = tree / "vendor/xiaomi/popsicle-private/prebuilt/aicore"
     if any(path.is_symlink() for path in [target, *target.parents]):
         parser.error("Private output path must not use symlinks")
-    if target.exists():
-        parser.error("Refusing to overwrite a prepared AICore input")
+    if target.exists() and not target.is_dir():
+        parser.error("Expected a prepared AICore directory")
     inputs = args.inputs.resolve(strict=True)
     if target.is_relative_to(inputs) or inputs.is_relative_to(target):
         parser.error("Original APK inputs and private output must be separate")
@@ -130,7 +130,20 @@ def main():
         (temporary / "source.txt").write_text(
             "Google Play delivery reference, 2026-09-15. Original signatures retained.\n"
             + base["versionName"] + "\nversionCode=" + base["versionCode"] + "\n")
-        publish_directory(temporary, target)
+        if target.exists():
+            if {p.name for p in target.iterdir()} != {"Android.bp", "source.txt", "aicore.apks"}:
+                raise ValueError("Unexpected files in prepared AICore directory")
+            for name in ("Android.bp", "source.txt"):
+                if (target / name).is_symlink() or (target / name).read_bytes() != (temporary / name).read_bytes():
+                    raise ValueError("Conflicting prepared AICore input: " + name)
+            if (target / "aicore.apks").is_symlink():
+                raise ValueError("Prepared AICore archive must not be a symlink")
+            with zipfile.ZipFile(target / "aicore.apks") as old, zipfile.ZipFile(temporary / "aicore.apks") as new:
+                if sorted(old.namelist()) != sorted(new.namelist()) or any(
+                        old.read(name) != new.read(name) for name in new.namelist()):
+                    raise ValueError("Conflicting prepared AICore APK set")
+        else:
+            publish_directory(temporary, target)
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)

@@ -23,11 +23,19 @@ Xiaomi `popsicle` 的 PixelOS Android 17 设备适配源码，产品为
 原厂固件、Google 交付包和签名私钥由使用者提供。开发测试、夹具、回放程序和
 测试目标已从发布集合排除，生产构建校验保留。LOFIC 移植独立维护。
 
+新机器从[源码准备](scripts/build-support/source-release.md)开始：配置 `.env.example`，
+同步固定 Android 源码及 Git LFS，提供 `OS4.0.0.23.XPBCNXM` 完整官方 OTA
+与完整 AICore 六分包，然后运行 `prepare-pixelos-inputs.py all`。
+该入口提取固件、准备 OEM 组件，并从固定上游读取 TurboAdapter；R8 与 dex2jar
+按固定摘要下载。构建、导出和三平台打包继续使用原有入口。
+
 ## 工作目录
 
 本机与服务器均使用独立工作根，维护源码位于 `project/`。
 `inputs/` 保存原始固件、外部 APK 和签名材料；`tools/`、`env/` 保存工具与配置。
 `work/` 保存可重建的固件提取、准备结果和缓存；`releases/` 保存正式交付。
 实机采集与人工研究归入 `evidence/`，原始 Git、独有源码和旧版本归入 `history/`。
-清理 `work/` 后按正式入口重新生成；原件、签名、采集和历史不属于构建缓存。
+仅清理已有明确生成步骤、且不再使用的具体构建输出或缓存。固件提取与准备目录须先确认
+原件、工具和恢复步骤齐备；正式构建入口不会自动恢复整个 `work/`。
+原件、签名、采集和历史不属于构建缓存。
 ROM 活动源码位于 `android/`，树内 OUT 和私有准备目录沿用 Android 的布局。

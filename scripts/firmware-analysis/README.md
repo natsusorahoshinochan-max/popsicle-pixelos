@@ -8,13 +8,17 @@ Linux 宿主需要 Python 3、`payload-dumper-go`，以及支持 `--extract`、`
 
 ```sh
 python3 scripts/firmware-analysis/extract-firmware-inputs.py \
-  --payload "$OFFICIAL_PAYLOAD" \
+  --rom "$OFFICIAL_ROM" \
   --payload-dumper /path/to/payload-dumper-go \
   --fsck-erofs /path/to/fsck.erofs \
   --output "$NEW_OFFICIAL_INPUT_DIRECTORY"
 ```
 
-工具从原 payload 提取全部分区镜像到 `images/`，并解包 `product`、`system_ext`、`vendor`、`odm`、`vendor_dlkm` 和 `system_dlkm` 到 `filesystems/`。版本检查完成后才发布输出目录。失败时删除本次临时目录，修正工具或输入后可重跑。
+入口只读取官方完整 OTA ZIP 根目录下唯一的 `payload.bin`；也可用 `--payload`
+直接提供原始 payload。它核对固定的 9,121,308,331 字节长度和 SHA-256，拒绝其他
+版本、增量包及重复 payload 成员。只提取指定成员，不展开 ZIP 中的任意路径。
+
+工具将已核对的 `payload.bin` 保存到输出根，从中提取全部分区镜像到 `images/`，并解包 `product`、`system_ext`、`vendor`、`odm`、`vendor_dlkm`、`system_dlkm` 和 `mi_ext` 到 `filesystems/`。`mi_ext` 用于原厂运营商扩展配置。版本检查完成后写入 `source.json` 并发布输出目录。失败时删除本次临时目录，修正工具或输入后可重跑。宿主工具的固定版本和安装步骤见[新机准备](../build-support/source-release.md)。
 
 `filesystems/` 用于读取 APK、ELF、属性和资源等原件内容。解包时保留文件权限，使用宿主所有者，并明确关闭宿主扩展属性写入，因而可以在无法写入 `security.selinux` 的宿主文件系统中准备内容输入。完整 Android UID、GID 和扩展属性仍保存在 `images/` 的原始 EROFS 镜像内。vendor/ODM 生产工具通过 `erofs_readback` 直接读取这些镜像中的元数据，权限、SELinux 和镜像生产校验继续按原规则执行。
 
